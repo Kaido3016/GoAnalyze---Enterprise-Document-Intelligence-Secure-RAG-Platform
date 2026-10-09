@@ -105,3 +105,26 @@ async def test_download_rejects_redirect_to_untrusted_host(monkeypatch):
     monkeypatch.setattr(sources.httpx, "AsyncClient", FakeClient)
     with pytest.raises(ValueError, match="not_allowlisted"):
         await sources._download_source(url)
+
+
+async def test_sync_sources_persists_hash_and_pending_review_chunks(db_engine, monkeypatch):
+    maker = async_sessionmaker(bind=db_engine, expire_on_commit=False, class_=AsyncSession)
+    monkeypatch.setattr(sources, "get_sessionmaker", lambda: maker)
+    await sources.seed_sources()
+
+    async def fake_download(_url):
+        return "Official consolidated law text. " * 40
+
+    async def fake_embed(texts):
+        return [[1.0, 0.0] for _ in texts]
+
+    monkeypatch.setattr(sources, "_download_source", fake_download)
+    monkeypatch.setattr(sources.rag_service, "embed", fake_embed)
+    result = await sources.sync_sources()
+
+    async with maker() as session:
+        rows = (await session.execute(select(RegulatorySourceORM))).scalars().all()
+        chunks = (await session.execute(select(sources.RegulatoryChunkORM))).scalars().all()
+    assert result == {"fetched_pending_review": len(sources.SOURCE_CATALOG), "failed": 0}
+    assert all(row.status == "fetched_pending_review" and row.content_sha256 for row in rows)
+    assert all(chunk.source_sha256 for chunk in chunks)
