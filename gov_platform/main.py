@@ -498,7 +498,8 @@ async def environmental_review(
     jurisdiction = str(payload.attributes.get("jurisdiction", "")).upper()
     if jurisdiction in {"QC", "CA"}:
         assessment = await rag_service.answer(
-            assessment_question, payload.tenant_id, context.roles, session, jurisdiction=jurisdiction
+            assessment_question, payload.tenant_id, context.roles, session,
+            jurisdiction=jurisdiction, document_ids=set(payload.documents)
         )
     else:
         assessment = AIFinding(
