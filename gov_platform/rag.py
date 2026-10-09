@@ -182,7 +182,10 @@ class GroundedRagService:
                 & (DocumentORM.version == DocumentChunkORM.document_version)
                 & (DocumentORM.sha256 == DocumentChunkORM.document_sha256),
             )
-            .where(DocumentChunkORM.tenant_id == tenant_id)
+            .where(
+                DocumentChunkORM.tenant_id == tenant_id,
+                DocumentChunkORM.embedding_model == settings.embedding_model,
+            )
         )
         if "protected-b-reader" not in roles:
             query = query.where(DocumentChunkORM.classification != "protected_b")
@@ -200,6 +203,7 @@ class GroundedRagService:
                 RegulatorySourceORM.status == "approved",
                 RegulatorySourceORM.content_sha256.is_not(None),
                 RegulatoryChunkORM.source_sha256 == RegulatorySourceORM.content_sha256,
+                RegulatoryChunkORM.embedding_model == settings.embedding_model,
             )
         )
         if jurisdiction:
