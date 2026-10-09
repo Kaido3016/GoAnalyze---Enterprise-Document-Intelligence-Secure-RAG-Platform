@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "audit": "npm audit --audit-level=high"
+    "audit": "npm audit --audit-level=high",
+    "check": "npm run lint && npm run typecheck && npm run build"
   },
   "dependencies": {
     "lucide-react": "0.468.0",
