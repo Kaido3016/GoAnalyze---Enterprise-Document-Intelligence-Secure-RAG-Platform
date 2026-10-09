@@ -229,6 +229,8 @@ class GroundedRagService:
                     f"[similarity:{score:.3f}]\n{row.content}"
                 )
             else:
+                if source is None:
+                    return self._unavailable("regulatory_source_metadata_missing")
                 evidence_parts.append(
                     f"[chunk:{row.id}] [official_regulatory_source:{source.title}] "
                     f"[source_url:{source.official_url}] [similarity:{score:.3f}]\n{row.content}"
@@ -282,6 +284,8 @@ class GroundedRagService:
                     )
                 )
             else:
+                if source is None:
+                    return self._unavailable("regulatory_source_metadata_missing")
                 citations.append(
                     EvidenceCitation(
                         document_id=None,
