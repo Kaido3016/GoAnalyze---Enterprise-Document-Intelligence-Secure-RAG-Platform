@@ -21,6 +21,10 @@ async def test_case_create_list_detail_are_tenant_scoped(client, patched_auth, r
     listing = await client.get("/v1/cases", headers={"Authorization": f"Bearer {token_a}"})
     assert listing.status_code == 200
     assert listing.json()["total"] == 1
+    summary = await client.get("/v1/analytics/summary", headers={"Authorization": f"Bearer {token_a}"})
+    assert summary.status_code == 200
+    assert summary.json()["cases_total"] == 1
+    assert summary.json()["documents_total"] == 0
     detail = await client.get(f"/v1/cases/{case_id}", headers={"Authorization": f"Bearer {token_a}"})
     assert detail.status_code == 200
     assert detail.json()["title"] == "North watershed permit"
