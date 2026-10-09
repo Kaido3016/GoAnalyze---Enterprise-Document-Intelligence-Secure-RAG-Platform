@@ -495,9 +495,20 @@ async def environmental_review(
         "and ambiguities. Cite every material claim with the exact chunk marker. "
         "Do not decide legal compliance, do not invent thresholds, and do not assign a risk score."
     )
-    assessment = await rag_service.answer(
-        assessment_question, context.tenant_id, context.roles, session
-    )
+    jurisdiction = str(payload.attributes.get("jurisdiction", "")).upper()
+    if jurisdiction in {"QC", "CA"}:
+        assessment = await rag_service.answer(
+            assessment_question, context.tenant_id, context.roles, session, jurisdiction=jurisdiction
+        )
+    else:
+        assessment = AIFinding(
+            finding_type="regulatory_evidence_review_unavailable",
+            statement="A jurisdiction must be specified before regulatory evidence can be assessed.",
+            confidence=0.0,
+            citations=[],
+            grounded=False,
+            explanation="Set attributes.jurisdiction to QC or CA and ensure the official source version is approved.",
+        )
     has_document_evidence = any(citation.document_id is not None for citation in assessment.citations)
     has_official_source = any(citation.regulatory_source_id is not None for citation in assessment.citations)
     if assessment.grounded and has_document_evidence and has_official_source:
