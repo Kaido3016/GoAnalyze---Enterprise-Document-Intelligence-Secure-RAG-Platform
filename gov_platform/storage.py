@@ -142,7 +142,7 @@ def _minio_backend_or_none() -> MinioObjectStorage | None:
             secure=settings.minio_secure,
         )
     except Exception:  # pragma: no cover - defensive, e.g. malformed endpoint
-        logger.error("MinIO client could not be initialized", exc_info=True)
+        logger.exception("MinIO client could not be initialized")
         return None
 
 
@@ -171,5 +171,5 @@ async def get_object_storage() -> ObjectStorageBackend:
         await backend.exists("__connectivity_probe__")
         return backend
     except Exception as exc:
-        logger.error("MinIO connectivity check failed", exc_info=True)
+        logger.exception("MinIO connectivity check failed")
         return development_fallback(type(exc).__name__)
