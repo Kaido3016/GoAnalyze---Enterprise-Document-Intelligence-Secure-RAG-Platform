@@ -1,6 +1,4 @@
 import re
-from uuid import uuid4
-
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import gov_platform.rag as rag_module
