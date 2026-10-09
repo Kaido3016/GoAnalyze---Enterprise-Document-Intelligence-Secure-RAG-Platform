@@ -111,13 +111,13 @@ class ProcessingJobSummary(BaseModel):
 
 
 class EnvironmentalReviewRequest(BaseModel):
-    tenant_id: str
+    tenant_id: str = Field(min_length=1, max_length=255)
     case_id: UUID
-    project_type: str
-    location: str
-    applicant: str
-    documents: list[UUID]
-    attributes: dict[str, Any] = Field(default_factory=dict)
+    project_type: str = Field(min_length=2, max_length=128)
+    location: str = Field(min_length=2, max_length=512)
+    applicant: str = Field(min_length=2, max_length=512)
+    documents: list[UUID] = Field(max_length=100)
+    attributes: dict[str, Any] = Field(default_factory=dict, max_length=100)
 
 
 class EnvironmentalReviewResult(BaseModel):
