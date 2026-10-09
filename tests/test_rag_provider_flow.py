@@ -44,6 +44,7 @@ def _settings():
         embedding_api_key="test-embedding-key",
         llm_base_url="https://llm.example/v1",
         llm_api_key="test-llm-key",
+        embedding_model="test-embedding",
         rag_min_similarity=0.15,
     )
 
