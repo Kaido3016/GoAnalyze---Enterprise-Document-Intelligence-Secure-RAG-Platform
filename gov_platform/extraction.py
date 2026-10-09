@@ -93,8 +93,8 @@ def _ocr_pdf_page(data: bytes, page_number: int) -> str:
 
 def _ocr_image(data: bytes) -> str:
     try:
-        from PIL import Image
         import pytesseract
+        from PIL import Image
     except ImportError as exc:
         raise ExtractionUnavailable("Pillow and pytesseract are required for image OCR") from exc
     try:
