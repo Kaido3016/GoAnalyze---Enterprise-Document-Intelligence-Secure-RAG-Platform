@@ -97,3 +97,22 @@ async def test_answer_rejects_forged_model_citation(db_session, monkeypatch):
     assert finding.grounded is False
     assert finding.citations == []
     assert "invalid_chunk_citations" in finding.explanation
+
+
+async def test_embedding_provider_response_is_sorted_and_validated(monkeypatch):
+    monkeypatch.setattr(rag_module, "get_settings", _settings)
+    service = GroundedRagService()
+
+    async def fake_post(_base_url, _api_key, path, payload):
+        assert path == "/embeddings"
+        assert payload["model"] == "test-embedding"
+        return {
+            "data": [
+                {"index": 1, "embedding": [0.0, 1.0]},
+                {"index": 0, "embedding": [1.0, 0.0]},
+            ]
+        }
+
+    monkeypatch.setattr(service, "_post", fake_post)
+    vectors = await service.embed(["first", "second"])
+    assert vectors == [[1.0, 0.0], [0.0, 1.0]]
