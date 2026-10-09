@@ -370,6 +370,7 @@ async def process_document(
     request: Request,
     context: TenantContext = Depends(get_current_context),
     session: AsyncSession = Depends(get_session),
+    storage: ObjectStorageBackend = Depends(get_object_storage),
 ) -> DocumentProcessingResult:
     """Run the native ingestion pipeline: OCR, classification, metadata and
     entity extraction, compliance analysis, risk scoring, vector indexing,
@@ -381,46 +382,37 @@ async def process_document(
     decision = evaluate_abac(context, "document:process", record.tenant_id, record.classification, purpose)
     if not decision.allowed:
         raise HTTPException(status_code=403, detail=decision.reason)
+    try:
+        raw_bytes = await storage.get(storage_key(record.tenant_id, record.id))
+    except ObjectNotFoundError:
+        raw_bytes = None
     return await ingestion_pipeline.run(
         record=record,
         actor=context.attributes.get("sub", "api-user"),
         trace_id=request.headers.get("traceparent", "local-trace"),
         purpose=purpose,
         session=session,
+        raw_bytes=raw_bytes,
     )
 
 
 @app.post("/v1/rag/answer")
 async def rag_answer(
     question: str,
-    citations: list[EvidenceCitation],
     request: Request,
     context: TenantContext = Depends(get_current_context),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """Answer a question grounded in the supplied evidence citations.
+    """Retrieve authorized, current-version chunks and generate a cited answer.
 
-    Every cited document is re-fetched from the tenant-scoped document store
-    and its ownership verified before the citation is trusted: a caller
-    cannot get a grounded answer that leans on a document belonging to a
-    different tenant just by forging a ``document_id`` in the request body.
+    Client-supplied citations are deliberately not accepted as evidence. The
+    retrieval service resolves chunks from durable storage and validates the
+    document version and digest before any content reaches the model.
     """
-    repository = DocumentRepository(session)
-    document_ids = [citation.document_id for citation in citations]
-    documents = await repository.get_many(document_ids)
-
-    for citation in citations:
-        record = documents.get(citation.document_id)
-        if record is None:
-            raise HTTPException(status_code=403, detail="citation_document_not_found")
-        if record.tenant_id != context.tenant_id and "platform-admin" not in context.roles:
-            raise HTTPException(status_code=403, detail="citation_tenant_mismatch")
-        if record.version != citation.version or record.sha256.lower() != citation.sha256.lower():
-            raise HTTPException(status_code=422, detail="citation_version_or_digest_mismatch")
-        if record.classification.value == "protected_b" and "protected-b-reader" not in context.roles:
-            raise HTTPException(status_code=403, detail="protected_b_role_required")
-
-    finding = rag_service.answer(question, citations)
+    try:
+        finding = await rag_service.answer(question, context.tenant_id, context.roles, session)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     await audit_log.append(
         session,
@@ -429,10 +421,10 @@ async def rag_answer(
             actor=context.attributes.get("sub", "api-user"),
             action="rag.answer_generated" if finding.grounded else "rag.answer_unavailable",
             resource_type="rag_query",
-            resource_id=",".join(str(cid) for cid in document_ids) or "none",
+            resource_id="retrieval",
             purpose=request.headers.get("x-purpose", "case-review"),
             trace_id=request.headers.get("traceparent", "local-trace"),
-            details={"grounded": finding.grounded, "citation_count": len(citations)},
+            details={"grounded": finding.grounded, "citation_count": len(finding.citations)},
         ),
     )
 
