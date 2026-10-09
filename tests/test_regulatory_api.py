@@ -7,7 +7,7 @@ from gov_platform.db.models import RegulatoryChunkORM, RegulatorySourceORM
 from tests.conftest import make_token
 
 
-async def test_regulatory_sources_require_platform_admin(client, rsa_keys):
+async def test_regulatory_sources_require_platform_admin(client, patched_auth, rsa_keys):
     private_pem, _ = rsa_keys
     token = make_token(private_pem, tenant_id="ministry-a", roles=["case-reviewer"])
     response = await client.get("/v1/regulatory-sources", headers={"Authorization": f"Bearer {token}"})
@@ -15,7 +15,7 @@ async def test_regulatory_sources_require_platform_admin(client, rsa_keys):
 
 
 async def test_platform_admin_can_approve_reviewed_official_source(
-    client, db_engine, rsa_keys
+    client, db_engine, patched_auth, rsa_keys
 ):
     private_pem, _ = rsa_keys
     token = make_token(private_pem, tenant_id="platform", roles=["platform-admin"])
