@@ -90,8 +90,21 @@ async def _download_source(url: str) -> str:
         follow_redirects=False,
         headers={"User-Agent": "GoAnalyze-RegulatorySourceIndexer/1.0"},
     ) as client:
-        response = await client.get(url)
-        response.raise_for_status()
+        response = None
+        for _ in range(4):
+            _validate_official_url(url)
+            response = await client.get(url)
+            if response.is_redirect:
+                location = response.headers.get("location")
+                if not location:
+                    raise ValueError("regulatory_source_redirect_without_location")
+                url = str(response.url.join(location))
+                continue
+            response.raise_for_status()
+            break
+        else:
+            raise ValueError("regulatory_source_redirect_limit_exceeded")
+        assert response is not None
         _validate_official_url(str(response.url))
         content_type = response.headers.get("content-type", "").lower()
         if "html" not in content_type and "text/plain" not in content_type:
