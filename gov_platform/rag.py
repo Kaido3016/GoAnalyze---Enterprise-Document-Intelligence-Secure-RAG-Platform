@@ -10,7 +10,6 @@ from __future__ import annotations
 import math
 import re
 from typing import Any
-from uuid import UUID
 
 import httpx
 from sqlalchemy import delete, select
@@ -159,6 +158,7 @@ class GroundedRagService:
         tenant_id: str,
         roles: set[str],
         session: AsyncSession,
+        jurisdiction: str | None = None,
     ) -> AIFinding:
         settings = get_settings()
         if not settings.embedding_base_url or not settings.embedding_api_key:
@@ -190,13 +190,18 @@ class GroundedRagService:
             (_cosine_similarity(query_vector, row.embedding), "document", row, None)
             for row in rows
         ]
-        approved_sources = (
-            await session.execute(
-                select(RegulatoryChunkORM, RegulatorySourceORM)
-                .join(RegulatorySourceORM, RegulatorySourceORM.id == RegulatoryChunkORM.source_id)
-                .where(RegulatorySourceORM.status == "approved", RegulatorySourceORM.content_sha256.is_not(None))
+        source_query = (
+            select(RegulatoryChunkORM, RegulatorySourceORM)
+            .join(RegulatorySourceORM, RegulatorySourceORM.id == RegulatoryChunkORM.source_id)
+            .where(
+                RegulatorySourceORM.status == "approved",
+                RegulatorySourceORM.content_sha256.is_not(None),
+                RegulatoryChunkORM.source_sha256 == RegulatorySourceORM.content_sha256,
             )
-        ).all()
+        )
+        if jurisdiction:
+            source_query = source_query.where(RegulatorySourceORM.jurisdiction == jurisdiction)
+        approved_sources = (await session.execute(source_query)).all()
         ranked.extend(
             (_cosine_similarity(query_vector, chunk.embedding), "regulatory", chunk, source)
             for chunk, source in approved_sources
