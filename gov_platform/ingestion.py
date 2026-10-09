@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .audit import audit_log
 from .environmental_engine import engine as compliance_engine
+from .extraction import ExtractionUnavailable, extract_document_text
 from .models import (
     AuditEvent,
     DocumentProcessingResult,
@@ -51,17 +52,15 @@ DOCUMENT_TYPE_KEYWORDS: dict[str, tuple[str, ...]] = {
 
 
 class OcrEngine(Protocol):
-    def extract_text(self, object_uri: str, content_type: str) -> str:
+    def extract_text(self, data: bytes, content_type: str, filename: str) -> str:
         ...
 
 
-class NullOcrEngine:
-    """Default OCR engine used until an enterprise OCR engine is configured
-    through the setup wizard. Returns an empty text body rather than making
-    any assumption about document content."""
+class DocumentOcrEngine:
+    """Extract text from native files and OCR scanned PDFs/images."""
 
-    def extract_text(self, object_uri: str, content_type: str) -> str:
-        return ""
+    def extract_text(self, data: bytes, content_type: str, filename: str) -> str:
+        return extract_document_text(data, content_type, filename)
 
 
 @dataclass
@@ -76,13 +75,14 @@ class IngestionPipeline:
         purpose: str,
         session: AsyncSession,
         raw_text: str | None = None,
+        raw_bytes: bytes | None = None,
     ) -> DocumentProcessingResult:
         result = DocumentProcessingResult(document_id=record.id)
 
         result.stages.append(self._timed(PipelineStage.upload, self._stage_upload, record))
 
         ocr_stage, text = self._timed_with_output(
-            PipelineStage.ocr, self._stage_ocr, record, raw_text
+            PipelineStage.ocr, self._stage_ocr, record, raw_text, raw_bytes
         )
         result.stages.append(ocr_stage)
 
@@ -146,17 +146,33 @@ class IngestionPipeline:
     def _stage_upload(self, record: DocumentRecord) -> dict[str, Any]:
         return {"object_uri": record.object_uri, "sha256": record.sha256}
 
-    def _stage_ocr(self, record: DocumentRecord, raw_text: str | None) -> tuple[dict[str, Any], str]:
-        text = raw_text if raw_text is not None else self.ocr_engine.extract_text(
-            record.object_uri, record.content_type
-        )
+    def _stage_ocr(
+        self, record: DocumentRecord, raw_text: str | None, raw_bytes: bytes | None
+    ) -> tuple[dict[str, Any], str]:
+        if raw_text is not None:
+            text = raw_text
+        elif raw_bytes is not None:
+            try:
+                text = self.ocr_engine.extract_text(raw_bytes, record.content_type, record.filename)
+            except (ExtractionUnavailable, ValueError) as exc:
+                return {
+                    "character_count": 0,
+                    "reason": str(exc),
+                    "__stage_status": "degraded",
+                }, ""
+        else:
+            return {
+                "character_count": 0,
+                "reason": "document_bytes_not_available",
+                "__stage_status": "skipped",
+            }, ""
         if not text.strip():
             return {
                 "character_count": 0,
-                "reason": "no_text_extracted_or_ocr_not_configured",
-                "__stage_status": "skipped",
+                "reason": "no_text_extracted",
+                "__stage_status": "degraded" if raw_bytes is not None else "skipped",
             }, text
-        return {"character_count": len(text)}, text
+        return {"character_count": len(text), "extraction_method": "native_or_ocr"}, text
 
     def _stage_classify(self, text: str) -> tuple[dict[str, Any], str]:
         if not text.strip():
@@ -310,4 +326,4 @@ class IngestionPipeline:
         return StageResult(stage=stage, status=status, output=stage_output, duration_ms=duration_ms), value
 
 
-ingestion_pipeline = IngestionPipeline(ocr_engine=NullOcrEngine())
+ingestion_pipeline = IngestionPipeline(ocr_engine=DocumentOcrEngine())
