@@ -50,14 +50,17 @@ class DocumentRecord(DocumentIngestRequest):
 
 
 class EvidenceCitation(BaseModel):
-    document_id: UUID
-    version: int
+    document_id: UUID | None = None
+    version: int = 1
     chunk_id: str
     page: int | None = None
     start_offset: int | None = None
     end_offset: int | None = None
-    sha256: str
+    sha256: str = ""
     excerpt: str
+    regulatory_source_id: UUID | None = None
+    source_title: str | None = None
+    source_url: str | None = None
 
 
 class AIFinding(BaseModel):
