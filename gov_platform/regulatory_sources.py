@@ -107,18 +107,27 @@ async def _download_source(url: str) -> str:
 
 
 async def sync_sources() -> dict[str, int]:
+    from .config import get_settings
+
     sessionmaker = get_sessionmaker()
+    settings = get_settings()
     result = {"fetched_pending_review": 0, "failed": 0}
     async with sessionmaker() as session:
-        sources = (await session.execute(select(RegulatorySourceORM))).scalars().all()
-        for source in sources:
-            try:
-                text = await _download_source(source.official_url)
-                digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-                parts = split_text(text, max_chars=1800, overlap=200)
-                vectors = []
-                for start in range(0, len(parts), 32):
-                    vectors.extend(await rag_service.embed([part for part, _ in parts[start : start + 32]]))
+        source_refs = (await session.execute(
+            select(RegulatorySourceORM.id, RegulatorySourceORM.official_url)
+        )).all()
+    for source_id, url in source_refs:
+        try:
+            text = await _download_source(url)
+            digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+            parts = split_text(text, max_chars=1800, overlap=200)
+            vectors = []
+            for batch_start in range(0, len(parts), 32):
+                vectors.extend(await rag_service.embed([part for part, _ in parts[batch_start : batch_start + 32]]))
+            async with sessionmaker() as session:
+                source = await session.get(RegulatorySourceORM, source_id)
+                if source is None:
+                    continue
                 await session.execute(delete(RegulatoryChunkORM).where(RegulatoryChunkORM.source_id == source.id))
                 source.content_text = text
                 source.content_sha256 = digest
@@ -132,19 +141,17 @@ async def sync_sources() -> dict[str, int]:
                             chunk_index=index,
                             content=part,
                             embedding=vector,
-                            embedding_model=__import__("gov_platform.config", fromlist=["get_settings"]).get_settings().embedding_model,
+                            embedding_model=settings.embedding_model,
                             source_sha256=digest,
                         )
-                        for index, (part, _) in enumerate(parts)
-                        for vector in vectors[index : index + 1]
+                        for index, ((part, _), vector) in enumerate(zip(parts, vectors, strict=True))
                     ]
                 )
                 await session.commit()
-                result["fetched_pending_review"] += 1
-            except (httpx.HTTPError, ValueError, ProviderUnavailable) as exc:
-                await session.rollback()
-                result["failed"] += 1
-                print(f"source sync failed: {source.official_url}: {type(exc).__name__}", file=sys.stderr)
+            result["fetched_pending_review"] += 1
+        except (httpx.HTTPError, ValueError, ProviderUnavailable) as exc:
+            result["failed"] += 1
+            print(f"source sync failed: {url}: {type(exc).__name__}", file=sys.stderr)
     return result
 
 
