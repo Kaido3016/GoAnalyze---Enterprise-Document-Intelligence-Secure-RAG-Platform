@@ -16,7 +16,6 @@ export default function AuditPage() {
 
   useEffect(() => {
     load(1, PAGE_SIZE);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function goToPage(p: number) {
