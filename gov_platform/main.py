@@ -1,7 +1,7 @@
 import hashlib
 import logging
-from datetime import UTC, datetime
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -14,7 +14,14 @@ from starlette.responses import Response, StreamingResponse
 from . import search as search_service
 from .audit import audit_log
 from .config import get_settings
-from .db.models import CaseORM, CaseAssignmentORM, DocumentORM, ProcessingJobORM, RegulatoryChunkORM, RegulatorySourceORM
+from .db.models import (
+    CaseAssignmentORM,
+    CaseORM,
+    DocumentORM,
+    ProcessingJobORM,
+    RegulatoryChunkORM,
+    RegulatorySourceORM,
+)
 from .db.repositories import CaseRepository, DocumentRepository
 from .db.session import get_session
 from .environmental_engine import engine
@@ -30,11 +37,11 @@ from .models import (
     DocumentRecord,
     EnvironmentalReviewRequest,
     EvidenceCitation,
+    ProcessingJobSummary,
+    RegulatorySourceApprovalRequest,
     SearchResponse,
     SetupConfiguration,
     SetupConfigurationResult,
-    ProcessingJobSummary,
-    RegulatorySourceApprovalRequest,
     TenantContext,
 )
 from .rag import rag_service
