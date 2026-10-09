@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from tests.conftest import make_token
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from gov_platform.db.models import ProcessingJobORM
@@ -92,7 +94,7 @@ async def test_failed_job_retry_requires_authorized_tenant_and_requeues(
     job_id = queued.json()["id"]
     maker = async_sessionmaker(bind=db_engine, expire_on_commit=False, class_=AsyncSession)
     async with maker() as session:
-        job = await session.get(ProcessingJobORM, job_id)
+        job = await session.get(ProcessingJobORM, UUID(job_id))
         assert job is not None
         job.status = "failed"
         job.attempts = 1
