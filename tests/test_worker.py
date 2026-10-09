@@ -3,7 +3,7 @@ from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-import gov_platform.worker as worker
+from gov_platform import worker
 from gov_platform.db.models import DocumentORM, ProcessingJobORM
 from gov_platform.models import DocumentProcessingResult
 
