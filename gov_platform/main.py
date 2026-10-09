@@ -466,6 +466,14 @@ async def environmental_review(
         if not document_decision.allowed:
             raise HTTPException(status_code=403, detail=document_decision.reason)
 
+    case_record = (await session.execute(
+        select(CaseORM).where(
+            CaseORM.id == payload.case_id,
+            CaseORM.tenant_id == payload.tenant_id,
+        )
+    )).scalar_one_or_none()
+    if case_record is None:
+        raise HTTPException(status_code=404, detail="case_not_found")
     available_types = {
         str(documents[doc_id].metadata.get("document_type"))
         for doc_id in payload.documents
@@ -476,6 +484,11 @@ async def environmental_review(
     # not fabricate citations or mark the checklist as grounded.
     citations: list[EvidenceCitation] = []
     result = engine.review(payload, available_types, citations)
+    case_record.risk_score = result.risk_score
+    case_record.recommendation = result.recommendation
+    case_record.status = "awaiting_information" if result.missing_documents else "technical_review"
+    case_record.updated_at = datetime.now(UTC)
+    await session.commit()
     await audit_log.append(
         session,
         AuditEvent(
@@ -785,6 +798,11 @@ async def assign_case(
 ) -> dict:
     if "case-manager" not in context.roles and "tenant-admin" not in context.roles:
         raise HTTPException(status_code=403, detail="case_manager_role_required")
+    case_record = (await session.execute(
+        select(CaseORM).where(CaseORM.id == case_id, CaseORM.tenant_id == context.tenant_id)
+    )).scalar_one_or_none()
+    if case_record is None:
+        raise HTTPException(status_code=404, detail="case_not_found")
     assignment = assignment_engine.assign(case_id, skill, {"analyst-1": 3, "analyst-2": 1})
     await CaseRepository(session).create_assignment(
         case_id=assignment.case_id,
