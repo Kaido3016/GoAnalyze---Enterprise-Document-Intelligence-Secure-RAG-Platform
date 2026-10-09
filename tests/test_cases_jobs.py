@@ -1,8 +1,9 @@
 from uuid import UUID
 
-from tests.conftest import make_token
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
 from gov_platform.db.models import ProcessingJobORM
+from tests.conftest import make_token
 
 
 async def test_case_create_list_detail_are_tenant_scoped(client, patched_auth, rsa_keys):
