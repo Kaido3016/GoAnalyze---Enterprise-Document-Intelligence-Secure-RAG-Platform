@@ -1,4 +1,6 @@
 from tests.conftest import make_token
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from gov_platform.db.models import ProcessingJobORM
 
 
 async def test_case_create_list_detail_are_tenant_scoped(client, patched_auth, rsa_keys):
@@ -64,3 +66,37 @@ async def test_async_document_processing_job_is_durable_and_tenant_scoped(
         f"/v1/jobs/{job_id}", headers={"Authorization": f"Bearer {token_b}"}
     )
     assert cross_tenant.status_code == 404
+
+
+async def test_failed_job_retry_requires_authorized_tenant_and_requeues(
+    client, db_engine, patched_auth, rsa_keys
+):
+    private_pem, _ = rsa_keys
+    token = make_token(private_pem, tenant_id="ministry-a", roles=["case-manager"])
+    response = await client.post(
+        "/v1/documents",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "tenant_id": "ministry-a",
+            "filename": "retry.txt",
+            "content_type": "text/plain",
+            "sha256": "e" * 64,
+            "object_uri": "ignored://client-value",
+        },
+    )
+    document_id = response.json()["id"]
+    queued = await client.post(
+        f"/v1/documents/{document_id}/process-async",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    job_id = queued.json()["id"]
+    maker = async_sessionmaker(bind=db_engine, expire_on_commit=False, class_=AsyncSession)
+    async with maker() as session:
+        job = await session.get(ProcessingJobORM, job_id)
+        assert job is not None
+        job.status = "failed"
+        job.attempts = 1
+        await session.commit()
+    retry = await client.post(f"/v1/jobs/{job_id}/retry", headers={"Authorization": f"Bearer {token}"})
+    assert retry.status_code == 202
+    assert retry.json()["status"] == "queued"
