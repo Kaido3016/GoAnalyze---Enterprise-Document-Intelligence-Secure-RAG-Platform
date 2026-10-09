@@ -97,6 +97,11 @@ class CaseSummary(BaseModel):
     document_count: int = 0
 
 
+class RegulatorySourceApprovalRequest(BaseModel):
+    source_version: str = Field(min_length=1, max_length=255)
+    reviewer_note: str = Field(min_length=10, max_length=2000)
+
+
 class ProcessingJobSummary(BaseModel):
     id: UUID
     tenant_id: str
