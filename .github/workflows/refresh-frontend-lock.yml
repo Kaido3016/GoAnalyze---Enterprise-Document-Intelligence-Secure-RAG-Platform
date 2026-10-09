@@ -49,6 +49,8 @@ jobs:
             echo "Lockfile already matches the manifest."
           else
             git commit -m "Regenerate frontend lockfile and apply compatible security fixes"
+            git fetch origin "${GITHUB_REF_NAME}"
+            git rebase "origin/${GITHUB_REF_NAME}"
             git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
       - name: Enforce dependency audit
