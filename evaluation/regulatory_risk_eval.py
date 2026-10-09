@@ -75,9 +75,20 @@ def evaluate(records: list[dict[str, Any]], minimum_cases: int = 5) -> dict[str,
     # acceptance thresholds approved by the legal/domain owner.
     result["release_gate_passed"] = (
         result["status"] == "evaluated"
+        and result["retrieval_hit_rate"] >= 0.85
         and result["unsupported_grounded_answer_rate"] == 0.0
+        and result["mean_citation_precision"] is not None
+        and result["mean_citation_precision"] >= 0.98
         and result["risk_metrics_valid"]
+        and result.get("risk_mae", float("inf")) <= 15.0
     )
+    result["gate_thresholds"] = {
+        "retrieval_hit_rate_min": 0.85,
+        "citation_precision_min": 0.98,
+        "unsupported_grounded_answer_rate_max": 0.0,
+        "risk_mae_max": 15.0,
+        "note": "Provisional engineering thresholds; domain/legal owners must approve thresholds before production use.",
+    }
     return result
 
 
