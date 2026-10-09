@@ -13,6 +13,10 @@ services:
       GOV_REDIS_URL: redis://redis:6379/0
       GOV_OPENSEARCH_URL: http://opensearch:9200
       GOV_MINIO_ENDPOINT: minio:9000
+      GOV_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+      GOV_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+      GOV_MINIO_BUCKET: ${GOV_MINIO_BUCKET:-goanalyze-documents}
+      GOV_MINIO_SECURE: "false"
       GOV_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       GOV_TEMPORAL_TARGET_HOST: temporal:7233
       GOV_KEYCLOAK_ISSUER: ${GOV_KEYCLOAK_ISSUER:-http://keycloak:8080/realms/goanalyze}
