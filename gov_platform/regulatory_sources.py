@@ -24,11 +24,11 @@ from .db.models import RegulatoryChunkORM, RegulatorySourceORM
 from .db.session import get_sessionmaker
 from .rag import ProviderUnavailable, rag_service, split_text
 
-ALLOWED_HOSTS = {"legisquebec.gouv.qc.ca", "laws-lois.justice.gc.ca"}
+ALLOWED_HOSTS = {"legisquebec.gouv.qc.ca", "www.legisquebec.gouv.qc.ca", "laws-lois.justice.gc.ca"}
 SOURCE_CATALOG = (
-    ("QC", "Environment Quality Act (chapter Q-2)", "https://www.legisquebec.gouv.qc.ca/en/document/cs/Q-2", "legisquebec.gouv.qc.ca"),
-    ("QC", "Regulation respecting the regulatory scheme applying to activities on the basis of their environmental impact", "https://www.legisquebec.gouv.qc.ca/en/document/cr/Q-2,%20r.%2017.1", "legisquebec.gouv.qc.ca"),
-    ("QC", "Land Protection and Rehabilitation Regulation", "https://www.legisquebec.gouv.qc.ca/en/document/cr/q-2,%20r.%2037", "legisquebec.gouv.qc.ca"),
+    ("QC", "Environment Quality Act (chapter Q-2)", "https://www.legisquebec.gouv.qc.ca/en/document/cs/Q-2", "www.legisquebec.gouv.qc.ca"),
+    ("QC", "Regulation respecting the regulatory scheme applying to activities on the basis of their environmental impact", "https://www.legisquebec.gouv.qc.ca/en/document/cr/Q-2,%20r.%2017.1", "www.legisquebec.gouv.qc.ca"),
+    ("QC", "Land Protection and Rehabilitation Regulation", "https://www.legisquebec.gouv.qc.ca/en/document/cr/q-2,%20r.%2037", "www.legisquebec.gouv.qc.ca"),
     ("CA", "Canadian Environmental Protection Act, 1999", "https://laws-lois.justice.gc.ca/eng/acts/c-15.31/", "laws-lois.justice.gc.ca"),
     ("CA", "Impact Assessment Act", "https://laws-lois.justice.gc.ca/eng/acts/I-2.75/", "laws-lois.justice.gc.ca"),
 )
