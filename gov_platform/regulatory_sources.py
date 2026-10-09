@@ -87,7 +87,7 @@ async def _download_source(url: str) -> str:
     _validate_official_url(url)
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(45.0, connect=10.0),
-        follow_redirects=True,
+        follow_redirects=False,
         headers={"User-Agent": "GoAnalyze-RegulatorySourceIndexer/1.0"},
     ) as client:
         response = await client.get(url)
