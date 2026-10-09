@@ -1,0 +1,14 @@
+# Production overlay. Set the real public hostname and mount TLS at a trusted ingress.
+# Compose is not a substitute for a hardened Kubernetes deployment.
+services:
+  keycloak:
+    command: ["start", "--import-realm"]
+    environment:
+      KC_HOSTNAME: ${KEYCLOAK_HOSTNAME:?set KEYCLOAK_HOSTNAME to the public HTTPS host}
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: "xforwarded"
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+    volumes:
+      - ./keycloak:/opt/keycloak/data/import:ro
+    ports: []
