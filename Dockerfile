@@ -7,7 +7,7 @@ WORKDIR /app
 
 # Tesseract is required for scanned PDFs and image-only documents.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng \
+    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng tesseract-ocr-fra \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml /app/
