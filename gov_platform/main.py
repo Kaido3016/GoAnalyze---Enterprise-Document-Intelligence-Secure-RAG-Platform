@@ -651,13 +651,21 @@ async def upload_document_content(
     if not decision.allowed:
         raise HTTPException(status_code=403, detail=decision.reason)
 
-    body = await request.body()
-    if not body:
+    # Consume the request incrementally and enforce the cap while reading;
+    # Request.body() would buffer an arbitrarily large attacker-controlled body
+    # before this endpoint could reject it. The storage interface still accepts
+    # bytes, so the accepted (<=100 MiB) payload is buffered once for persistence.
+    body_buffer = bytearray()
+    async for chunk in request.stream():
+        if len(body_buffer) + len(chunk) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="upload_too_large")
+        body_buffer.extend(chunk)
+    if not body_buffer:
         raise HTTPException(status_code=422, detail="empty_upload_body")
-    if len(body) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="upload_too_large")
 
-    digest = hashlib.sha256(body).hexdigest()
+    digest = hashlib.sha256(body_buffer).hexdigest()
+    body = bytes(body_buffer)
+    del body_buffer
     if digest != record.sha256:
         raise HTTPException(status_code=422, detail="sha256_mismatch")
 
