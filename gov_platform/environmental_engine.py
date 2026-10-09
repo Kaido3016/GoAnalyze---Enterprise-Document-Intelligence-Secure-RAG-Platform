@@ -134,7 +134,7 @@ class EnvironmentalAuthorizationEngine:
         # Do not auto-advance a case when the evidence and risk model are unvalidated.
         return "refer_to_senior_technical_review"
 
-    def _justification(self, missing: list[str], risk_score: float, mappings: list[AIFinding]) -> str:
+    def _justification(self, missing: list[str], risk_score: float | None, mappings: list[AIFinding]) -> str:
         mapped = "; ".join(mapping.statement for mapping in mappings)
         if missing:
             return (
