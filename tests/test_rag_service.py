@@ -1,5 +1,3 @@
-from uuid import uuid4
-
 from sqlalchemy import select
 
 from gov_platform.db.models import DocumentChunkORM
