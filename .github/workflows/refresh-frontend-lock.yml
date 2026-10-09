@@ -29,7 +29,9 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Regenerate lockfile from reviewed manifest
         working-directory: frontend
-        run: npm install --package-lock-only --ignore-scripts --no-audit
+        run: |
+          rm -f package-lock.json
+          npm install --package-lock-only --ignore-scripts --no-audit
       - name: Apply compatible advisory fixes
         working-directory: frontend
         shell: bash
