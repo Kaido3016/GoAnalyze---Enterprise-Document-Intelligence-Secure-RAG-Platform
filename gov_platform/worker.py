@@ -25,44 +25,43 @@ MAX_ATTEMPTS = 3
 
 async def claim_job():
     sessionmaker = get_sessionmaker()
-    async with sessionmaker() as session:
-        async with session.begin():
-            now = datetime.now(UTC)
-            await session.execute(
-                update(ProcessingJobORM)
-                .where(
-                    ProcessingJobORM.status == "processing",
-                    ProcessingJobORM.started_at < now - STALE_AFTER,
-                    ProcessingJobORM.attempts >= MAX_ATTEMPTS,
-                )
-                .values(status="failed", error_code="worker_lease_expired", finished_at=now)
+    async with sessionmaker() as session, session.begin():
+        now = datetime.now(UTC)
+        await session.execute(
+            update(ProcessingJobORM)
+            .where(
+                ProcessingJobORM.status == "processing",
+                ProcessingJobORM.started_at < now - STALE_AFTER,
+                ProcessingJobORM.attempts >= MAX_ATTEMPTS,
             )
-            result = await session.execute(
-                select(ProcessingJobORM)
-                .where(
-                    or_(
-                        ProcessingJobORM.status == "queued",
-                        (
-                            (ProcessingJobORM.status == "processing")
-                            & (ProcessingJobORM.started_at < now - STALE_AFTER)
-                            & (ProcessingJobORM.attempts < MAX_ATTEMPTS)
-                        ),
-                    )
+            .values(status="failed", error_code="worker_lease_expired", finished_at=now)
+        )
+        result = await session.execute(
+            select(ProcessingJobORM)
+            .where(
+                or_(
+                    ProcessingJobORM.status == "queued",
+                    (
+                        (ProcessingJobORM.status == "processing")
+                        & (ProcessingJobORM.started_at < now - STALE_AFTER)
+                        & (ProcessingJobORM.attempts < MAX_ATTEMPTS)
+                    ),
                 )
-                .order_by(ProcessingJobORM.created_at)
-                .with_for_update(skip_locked=True)
-                .limit(1)
             )
-            job = result.scalar_one_or_none()
-            if job is None:
-                return None
-            job.status = "processing"
-            job.attempts += 1
-            job.started_at = now
-            job.finished_at = None
-            job.error_code = None
-            await session.flush()
-            return job.id
+            .order_by(ProcessingJobORM.created_at)
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        job = result.scalar_one_or_none()
+        if job is None:
+            return None
+        job.status = "processing"
+        job.attempts += 1
+        job.started_at = now
+        job.finished_at = None
+        job.error_code = None
+        await session.flush()
+        return job.id
 
 
 async def process_job(job_id) -> None:
