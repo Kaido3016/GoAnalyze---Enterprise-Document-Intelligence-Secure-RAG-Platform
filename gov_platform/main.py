@@ -20,6 +20,7 @@ from .db.session import get_session
 from .environmental_engine import engine
 from .ingestion import ingestion_pipeline
 from .models import (
+    AIFinding,
     AuditEvent,
     AuditEventListResponse,
     CaseCreateRequest,
@@ -484,6 +485,46 @@ async def environmental_review(
     # not fabricate citations or mark the checklist as grounded.
     citations: list[EvidenceCitation] = []
     result = engine.review(payload, available_types, citations)
+    # A source-backed assessment is only surfaced as grounded when the model
+    # cites both authorized case evidence and an approved official source.
+    assessment_question = (
+        f"Prepare a preliminary evidence review for project type {payload.project_type} "
+        f"at {payload.location}. Applicant: {payload.applicant}. "
+        "Compare only the retrieved document evidence with the approved official "
+        "regulatory sources. Identify potentially relevant requirements, evidence gaps, "
+        "and ambiguities. Cite every material claim with the exact chunk marker. "
+        "Do not decide legal compliance, do not invent thresholds, and do not assign a risk score."
+    )
+    assessment = await rag_service.answer(
+        assessment_question, context.tenant_id, context.roles, session
+    )
+    has_document_evidence = any(citation.document_id is not None for citation in assessment.citations)
+    has_official_source = any(citation.regulatory_source_id is not None for citation in assessment.citations)
+    if assessment.grounded and has_document_evidence and has_official_source:
+        result.compliance_findings.append(
+            AIFinding(
+                finding_type="regulatory_evidence_review",
+                statement=assessment.statement,
+                confidence=0.0,
+                citations=assessment.citations,
+                grounded=True,
+                explanation=(
+                    "Citations resolve to current-version tenant evidence and an approved official source. "
+                    "Confidence is uncalibrated; this is preliminary decision support, not a legal conclusion."
+                ),
+            )
+        )
+    else:
+        result.compliance_findings.append(
+            AIFinding(
+                finding_type="regulatory_evidence_review_unavailable",
+                statement="A source-verified regulatory assessment could not be produced.",
+                confidence=0.0,
+                citations=[],
+                grounded=False,
+                explanation=assessment.explanation,
+            )
+        )
     case_record.risk_score = result.risk_score
     case_record.recommendation = result.recommendation
     case_record.status = "awaiting_information" if result.missing_documents else "technical_review"
