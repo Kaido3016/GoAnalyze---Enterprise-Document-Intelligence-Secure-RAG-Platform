@@ -16,7 +16,9 @@ async def _ingest(client, token: str, tenant_id: str, filename: str, digest: str
         },
     )
     assert response.status_code == 200
-    return response.json()["id"]
+    payload = response.json()
+    assert payload["object_uri"] == f"object://{tenant_id}/{payload['id']}"
+    return payload["id"]
 
 
 async def test_document_list_is_tenant_scoped(client, patched_auth, rsa_keys):
