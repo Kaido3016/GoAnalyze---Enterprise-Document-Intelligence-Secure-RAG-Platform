@@ -110,7 +110,8 @@ async def _download_source(url: str) -> str:
             break
         else:
             raise ValueError("regulatory_source_redirect_limit_exceeded")
-        assert response is not None
+        if response is None:
+            raise RuntimeError("regulatory_source_response_missing")
         _validate_official_url(str(response.url))
         content_type = response.headers.get("content-type", "").lower()
         if "html" not in content_type and "text/plain" not in content_type:
