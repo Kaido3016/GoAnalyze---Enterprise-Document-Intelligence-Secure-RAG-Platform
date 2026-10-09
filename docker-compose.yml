@@ -31,7 +31,7 @@ services:
       opensearch:
         condition: service_healthy
       minio:
-        condition: service_healthy
+        condition: service_started
       kafka:
         condition: service_started
       temporal:
@@ -99,8 +99,19 @@ services:
       - opensearchdata:/usr/share/opensearch/data
     networks: [app]
 
+  # Initialize the named volume for the non-root Chainguard MinIO user.
+  minio-init:
+    image: busybox:1.37
+    user: "0:0"
+    command: ["sh", "-c", "chown -R 65532:65532 /data"]
+    volumes:
+      - miniodata:/data
+    restart: "no"
+    networks: [app]
+
   minio:
-    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+    # Local/demo only. Production should use an approved managed S3 service.
+    image: ${MINIO_IMAGE:-cgr.dev/chainguard/minio:latest}
     restart: unless-stopped
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
@@ -111,11 +122,9 @@ services:
       - "127.0.0.1:9001:9001"
     volumes:
       - miniodata:/data
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
     networks: [app]
 
   zookeeper:
