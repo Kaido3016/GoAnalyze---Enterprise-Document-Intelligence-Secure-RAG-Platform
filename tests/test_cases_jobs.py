@@ -1,5 +1,3 @@
-import uuid
-
 from tests.conftest import make_token
 
 
