@@ -151,6 +151,9 @@ class DocumentProcessingResult(BaseModel):
     risk_score: float | None = None
     workflow_queue: str | None = None
     completed: bool = False
+    # completed means orchestration terminated; this field communicates whether
+    # every requested capability actually ran or one or more stages were skipped.
+    status: str = "pending"
 
 
 class AuditEvent(BaseModel):
