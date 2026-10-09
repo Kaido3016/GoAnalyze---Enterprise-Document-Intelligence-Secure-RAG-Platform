@@ -215,11 +215,16 @@ class IngestionPipeline:
                 version=record.version,
                 chunk_id="0",
                 sha256=record.sha256,
-                excerpt=metadata.get("filename", record.filename),
+                excerpt=text[:600],
             )
         ]
         review = compliance_engine.review(review_request, available_types, citations)
-        return review.model_dump(mode="json"), {"risk_score": review.risk_score, "review": review}
+        stage_output = review.model_dump(mode="json")
+        stage_output["reason"] = (
+            "rule_based_checklist_only; authoritative regulatory-source retrieval is not configured"
+        )
+        stage_output["__stage_status"] = "degraded"
+        return stage_output, {"risk_score": review.risk_score, "review": review}
 
     def _stage_risk(self, compliance_output: dict[str, Any]) -> tuple[dict[str, Any], float | None]:
         if compliance_output.get("risk_score") is None:
