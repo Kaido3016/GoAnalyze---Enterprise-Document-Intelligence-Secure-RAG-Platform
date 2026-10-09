@@ -159,6 +159,7 @@ class GroundedRagService:
         roles: set[str],
         session: AsyncSession,
         jurisdiction: str | None = None,
+        document_ids: set[Any] | None = None,
     ) -> AIFinding:
         settings = get_settings()
         if not settings.embedding_base_url or not settings.embedding_api_key:
@@ -185,6 +186,8 @@ class GroundedRagService:
         )
         if "protected-b-reader" not in roles:
             query = query.where(DocumentChunkORM.classification != "protected_b")
+        if document_ids is not None:
+            query = query.where(DocumentChunkORM.document_id.in_(document_ids))
         rows = (await session.execute(query)).scalars().all()
         ranked: list[tuple[float, str, Any, Any | None]] = [
             (_cosine_similarity(query_vector, row.embedding), "document", row, None)
