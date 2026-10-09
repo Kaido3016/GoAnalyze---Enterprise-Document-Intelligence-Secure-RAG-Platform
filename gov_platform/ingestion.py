@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .audit import audit_log
 from .environmental_engine import engine as compliance_engine
 from .extraction import ExtractionUnavailable, extract_document_text
+from .rag import ProviderUnavailable, rag_service
 from .models import (
     AuditEvent,
     DocumentProcessingResult,
@@ -119,8 +120,24 @@ class IngestionPipeline:
         result.stages.append(risk_stage)
         result.risk_score = risk_score
 
-        index_stage = self._timed(PipelineStage.vector_indexing, self._stage_vector_index, record, text)
-        result.stages.append(index_stage)
+        index_started = time.perf_counter()
+        try:
+            index_output = await rag_service.index_document(record, text, session)
+        except Exception as exc:
+            index_output = {
+                "indexed": False,
+                "reason": f"indexing_failed:{type(exc).__name__}",
+                "__stage_status": "degraded",
+            }
+        index_status = index_output.pop("__stage_status", "completed")
+        result.stages.append(
+            StageResult(
+                stage=PipelineStage.vector_indexing,
+                status=index_status,
+                output=index_output,
+                duration_ms=(time.perf_counter() - index_started) * 1000,
+            )
+        )
 
         workflow_stage, queue = self._timed_with_output(
             PipelineStage.workflow_engine, self._stage_workflow, record, risk_score
@@ -250,17 +267,6 @@ class IngestionPipeline:
             }, None
         risk_score = float(compliance_output["risk_score"])
         return {"risk_score": risk_score}, risk_score
-
-    def _stage_vector_index(self, record: DocumentRecord, text: str) -> dict[str, Any]:
-        # This codebase has metadata/full-text indexing, but no embedding model
-        # or vector-store write path. Never report a successful vector index
-        # until that capability is actually configured and verified.
-        del record, text
-        return {
-            "indexed": False,
-            "reason": "embedding_model_and_vector_store_not_configured",
-            "__stage_status": "skipped",
-        }
 
     def _stage_workflow(self, record: DocumentRecord, risk_score: float | None) -> tuple[dict[str, Any], str]:
         workload = {"technical-review-pool": 4, "senior-review-pool": 1}
