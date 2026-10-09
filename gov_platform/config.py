@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     llm_model: str = "gpt-4.1-mini"
     rag_top_k: int = 5
     rag_min_similarity: float = 0.15
+    ocr_languages: str = "eng+fra"
     minio_endpoint: str = "minio:9000"
     minio_access_key: str | None = None
     minio_secret_key: str | None = None
