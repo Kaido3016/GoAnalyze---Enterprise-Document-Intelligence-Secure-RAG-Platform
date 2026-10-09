@@ -2,7 +2,6 @@
 
 import { useCallback, useState } from "react";
 import { ApiError, documentsApi } from "@/lib/api";
-import { cacheDocumentRecord, cacheSearchHits } from "@/lib/documentCache";
 import type {
   DocumentIngestRequest,
   DocumentProcessingResult,
