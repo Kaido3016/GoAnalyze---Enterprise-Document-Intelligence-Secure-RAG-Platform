@@ -83,7 +83,7 @@ export function Sidebar({
 
   return (
     <nav
-      className={cx("sidebar", mobileOpen && "mobileOpen")}
+      className={cx("sidebar", collapsed && "collapsed", mobileOpen && "mobileOpen")}
       aria-label="Primary navigation"
     >
       <div className="sidebarBrand">
