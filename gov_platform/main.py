@@ -315,6 +315,9 @@ async def ingest_document(
     if not decision.allowed:
         raise HTTPException(status_code=403, detail=decision.reason)
     record = DocumentRecord(**payload.model_dump())
+    # The client-provided URI is never authoritative. Allocate a stable,
+    # server-controlled object key before persisting the document record.
+    record.object_uri = f"object://{storage_key(record.tenant_id, record.id)}"
     await DocumentRepository(session).create(record)
     await search_service.index_document(record)
     await audit_log.append(
