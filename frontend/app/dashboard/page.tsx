@@ -25,7 +25,6 @@ export default function DashboardPage() {
       .ready()
       .then(() => setApiReady(true))
       .catch(() => setApiReady(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const loading = search.status === "loading" && audit.status === "loading";
