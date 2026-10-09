@@ -94,7 +94,7 @@ async def _lifespan(app: FastAPI):
 app = FastAPI(
     title="GoAnalyze Government Document Intelligence Platform",
     version="2.0.0",
-    description="Government-grade AI document intelligence API with audit, ABAC, RAG citations, and environmental review.",
+    description="Document intelligence API with audit, ABAC, search, and decision-support workflows. Grounded generation and vector retrieval require configured providers.",
     lifespan=_lifespan,
 )
 
@@ -334,22 +334,13 @@ async def ingest_document(
 
 @app.post("/v1/setup", response_model=SetupConfigurationResult)
 async def submit_setup_configuration(payload: SetupConfiguration) -> SetupConfigurationResult:
-    """Accept configuration collected by the enterprise configuration wizard
-    (PostgreSQL, MinIO, OpenSearch, Redis, Keycloak/Azure AD/Microsoft Entra ID,
-    OCR engine, AI provider, object storage, email notifications). Real
-    deployments persist this to a secrets manager; here it is validated and
-    echoed back as accepted components so operators know what is wired up."""
-    validated = [
-        "postgresql",
-        "minio",
-        "opensearch",
-        "redis",
-        payload.identity_provider.value,
-        "ocr_engine",
-        "ai_provider",
-        "object_storage",
+    """Validate the request shape only; this endpoint does not persist secrets,
+    test connectivity, or configure external services."""
+    # Do not report requested services as validated when no live checks ran.
+    validated: list[str] = []
+    warnings: list[str] = [
+        "configuration_received_only; no connectivity checks or persistence performed"
     ]
-    warnings: list[str] = []
     if payload.identity_provider == "keycloak" and not payload.keycloak_issuer:
         warnings.append("keycloak_issuer_missing")
     if payload.identity_provider == "azure_ad" and not (payload.azure_ad_tenant_id and payload.azure_ad_client_id):
@@ -357,7 +348,6 @@ async def submit_setup_configuration(payload: SetupConfiguration) -> SetupConfig
     if payload.identity_provider == "microsoft_entra_id" and not payload.microsoft_entra_id_tenant_id:
         warnings.append("microsoft_entra_id_tenant_missing")
     if payload.email_notifications_enabled:
-        validated.append("email_notifications")
         if not (payload.email_smtp_host and payload.email_from_address):
             warnings.append("email_notification_settings_incomplete")
     return SetupConfigurationResult(accepted=len(warnings) == 0, validated_components=validated, warnings=warnings)
@@ -450,6 +440,23 @@ async def environmental_review(
 
     repository = DocumentRepository(session)
     documents = await repository.get_many(payload.documents)
+    missing_ids = set(payload.documents) - set(documents)
+    if missing_ids:
+        raise HTTPException(status_code=404, detail="review_document_not_found")
+    for document in documents.values():
+        # A review may only use documents belonging to the review tenant,
+        # even for platform administrators; mixed-tenant evidence is rejected.
+        if document.tenant_id != payload.tenant_id:
+            raise HTTPException(status_code=403, detail="review_document_tenant_mismatch")
+        document_decision = evaluate_abac(
+            context,
+            "document:read",
+            document.tenant_id,
+            document.classification,
+            request.headers.get("x-purpose", "case-review"),
+        )
+        if not document_decision.allowed:
+            raise HTTPException(status_code=403, detail=document_decision.reason)
 
     available_types = {
         str(documents[doc_id].metadata.get("document_type"))
@@ -557,6 +564,66 @@ async def search_documents(
         classification=classification,
         content_type=content_type,
     )
+
+
+@app.get("/v1/documents")
+async def list_documents(
+    request: Request,
+    page: int = 1,
+    page_size: int = 20,
+    classification: str | None = None,
+    content_type: str | None = None,
+    case_id: UUID | None = None,
+    context: TenantContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """List documents visible to the authenticated tenant, newest first."""
+    if page < 1:
+        raise HTTPException(status_code=422, detail="page_must_be_positive")
+    if not (1 <= page_size <= 100):
+        raise HTTPException(status_code=422, detail="page_size_must_be_between_1_and_100")
+    purpose = request.headers.get("x-purpose", "case-review")
+    purpose_decision = evaluate_abac(
+        context, "document:read", context.tenant_id, 
+        __import__("gov_platform.models", fromlist=["ClassificationLevel"]).ClassificationLevel.internal,
+        purpose,
+    )
+    if not purpose_decision.allowed:
+        raise HTTPException(status_code=403, detail=purpose_decision.reason)
+    records, total = await DocumentRepository(session).list_for_tenant(
+        tenant_id=context.tenant_id,
+        page=page,
+        page_size=page_size,
+        classification=classification,
+        content_type=content_type,
+        case_id=case_id,
+        exclude_protected_b="protected-b-reader" not in context.roles,
+    )
+    return {
+        "items": [record.model_dump(mode="json") for record in records],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total + page_size - 1) // page_size if total else 0,
+    }
+
+
+@app.get("/v1/documents/{document_id}", response_model=DocumentRecord)
+async def get_document(
+    document_id: UUID,
+    request: Request,
+    context: TenantContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> DocumentRecord:
+    """Fetch one document after tenant and classification authorization."""
+    record = await DocumentRepository(session).get(document_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="document_not_found")
+    purpose = request.headers.get("x-purpose", "case-review")
+    decision = evaluate_abac(context, "document:read", record.tenant_id, record.classification, purpose)
+    if not decision.allowed:
+        raise HTTPException(status_code=403, detail=decision.reason)
+    return record
 
 
 @app.put("/v1/documents/{document_id}/content")
