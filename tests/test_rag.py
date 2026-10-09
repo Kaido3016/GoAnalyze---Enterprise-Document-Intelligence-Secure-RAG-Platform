@@ -11,8 +11,8 @@ def test_unavailable_result_never_claims_grounded_generation():
 
 
 async def test_service_fails_closed_without_embedding_or_generation_provider(db_session, monkeypatch):
-    from gov_platform.config import Settings
     import gov_platform.rag as rag_module
+    from gov_platform.config import Settings
 
     monkeypatch.setattr(
         rag_module,
