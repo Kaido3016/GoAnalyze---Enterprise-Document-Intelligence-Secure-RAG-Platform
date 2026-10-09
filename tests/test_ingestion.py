@@ -47,7 +47,7 @@ async def test_pipeline_runs_all_ten_stages_in_order(db_session):
     ]
 
 
-async def test_pipeline_classifies_and_scores_risk_from_text(db_session):
+async def test_pipeline_classifies_but_does_not_invent_unvalidated_risk(db_session):
     record = _make_record()
 
     result = await ingestion_pipeline.run(
@@ -60,8 +60,8 @@ async def test_pipeline_classifies_and_scores_risk_from_text(db_session):
     )
 
     assert result.classification_label == "application_form"
-    assert result.risk_score is not None
-    assert result.workflow_queue in {"technical-review-review", "senior-review-review"}
+    assert result.risk_score is None
+    assert result.workflow_queue == "senior-review-review"
 
 
 async def test_pipeline_handles_empty_text_without_error(db_session):
