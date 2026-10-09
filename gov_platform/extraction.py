@@ -81,6 +81,8 @@ def _ocr_pdf_page(data: bytes, page_number: int) -> str:
         bitmap = page.render(scale=1.8, rotation=0)
         image = bitmap.to_pil()
         return pytesseract.image_to_string(image, lang="eng", timeout=45)
+    except ExtractionUnavailable:
+        raise
     except Exception as exc:
         if exc.__class__.__name__ == "TesseractNotFoundError":
             raise ExtractionUnavailable("Tesseract OCR executable is not installed") from exc
@@ -97,6 +99,8 @@ def _ocr_image(data: bytes) -> str:
         with Image.open(io.BytesIO(data)) as image:
             image.thumbnail((5000, 5000))
             return pytesseract.image_to_string(image, lang="eng", timeout=45)[:MAX_EXTRACTED_CHARS]
+    except ExtractionUnavailable:
+        raise
     except Exception as exc:
         if exc.__class__.__name__ == "TesseractNotFoundError":
             raise ExtractionUnavailable("Tesseract OCR executable is not installed") from exc
