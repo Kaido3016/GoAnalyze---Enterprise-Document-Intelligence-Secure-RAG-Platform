@@ -474,17 +474,10 @@ async def environmental_review(
         for doc_id in payload.documents
         if doc_id in documents and documents[doc_id].metadata.get("document_type")
     }
-    citations = [
-        EvidenceCitation(
-            document_id=doc_id,
-            version=documents[doc_id].version,
-            chunk_id=f"{doc_id}:metadata",
-            sha256=documents[doc_id].sha256,
-            excerpt=f"{documents[doc_id].filename} supplied for {payload.project_type}",
-        )
-        for doc_id in payload.documents
-        if doc_id in documents
-    ]
+    # This endpoint currently has document metadata, but no persisted,
+    # verified extracted-text/chunk store. Filenames are not evidence, so do
+    # not fabricate citations or mark the checklist as grounded.
+    citations: list[EvidenceCitation] = []
     result = engine.review(payload, available_types, citations)
     await audit_log.append(
         session,
