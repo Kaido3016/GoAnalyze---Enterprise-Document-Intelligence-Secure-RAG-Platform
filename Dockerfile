@@ -5,6 +5,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# Tesseract is required for scanned PDFs and image-only documents.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY pyproject.toml /app/
 COPY gov_platform /app/gov_platform
 COPY alembic.ini /app/
