@@ -69,6 +69,44 @@ class AIFinding(BaseModel):
     explanation: str
 
 
+class CaseCreateRequest(BaseModel):
+    title: str = Field(min_length=3, max_length=512)
+    project_type: str = Field(min_length=2, max_length=128)
+    location: str = Field(min_length=2, max_length=512)
+    applicant: str = Field(min_length=2, max_length=512)
+    attributes: dict[str, Any] = Field(default_factory=dict)
+
+
+class CaseSummary(BaseModel):
+    id: UUID
+    tenant_id: str
+    title: str
+    project_type: str
+    location: str
+    applicant: str
+    status: str
+    risk_score: float | None = None
+    recommendation: str | None = None
+    attributes: dict[str, Any] = Field(default_factory=dict)
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+    document_count: int = 0
+
+
+class ProcessingJobSummary(BaseModel):
+    id: UUID
+    tenant_id: str
+    document_id: UUID
+    status: str
+    attempts: int
+    error_code: str | None = None
+    result: dict[str, Any] | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
 class EnvironmentalReviewRequest(BaseModel):
     tenant_id: str
     case_id: UUID
@@ -85,7 +123,7 @@ class EnvironmentalReviewResult(BaseModel):
     missing_documents: list[str]
     regulation_mappings: list[AIFinding]
     compliance_findings: list[AIFinding]
-    risk_score: float = Field(ge=0, le=100)
+    risk_score: float | None = Field(default=None, ge=0, le=100)
     recommendation: str
     justification: str
     requires_human_review: bool
