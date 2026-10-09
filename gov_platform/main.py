@@ -14,7 +14,7 @@ from starlette.responses import Response, StreamingResponse
 from . import search as search_service
 from .audit import audit_log
 from .config import get_settings
-from .db.models import CaseORM, CaseAssignmentORM, DocumentORM, ProcessingJobORM
+from .db.models import CaseORM, CaseAssignmentORM, DocumentORM, ProcessingJobORM, RegulatoryChunkORM, RegulatorySourceORM
 from .db.repositories import CaseRepository, DocumentRepository
 from .db.session import get_session
 from .environmental_engine import engine
@@ -490,6 +490,72 @@ async def environmental_review(
         ),
     )
     return result.model_dump(mode="json")
+
+
+@app.get("/v1/regulatory-sources")
+async def list_regulatory_sources(
+    context: TenantContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    if "platform-admin" not in context.roles:
+        raise HTTPException(status_code=403, detail="platform_admin_required")
+    sources = (await session.execute(
+        select(RegulatorySourceORM).order_by(RegulatorySourceORM.jurisdiction, RegulatorySourceORM.title)
+    )).scalars().all()
+    return {
+        "items": [
+            {"id": str(source.id), "jurisdiction": source.jurisdiction, "title": source.title,
+             "official_url": source.official_url, "authority_domain": source.authority_domain,
+             "source_version": source.source_version, "status": source.status,
+             "content_sha256": source.content_sha256, "last_verified_at": source.last_verified_at.isoformat()
+             if source.last_verified_at else None, "reviewer": source.reviewer}
+            for source in sources
+        ],
+        "total": len(sources),
+    }
+
+
+@app.post("/v1/regulatory-sources/{source_id}/approve")
+async def approve_regulatory_source(
+    source_id: UUID,
+    request: Request,
+    context: TenantContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    if "platform-admin" not in context.roles:
+        raise HTTPException(status_code=403, detail="platform_admin_required")
+    source = await session.get(RegulatorySourceORM, source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="regulatory_source_not_found")
+    if source.status != "fetched_pending_review" or not source.content_sha256:
+        raise HTTPException(status_code=409, detail="source_must_be_fetched_and_pending_review")
+    chunk_count = (await session.execute(
+        select(func.count()).select_from(RegulatoryChunkORM).where(
+            RegulatoryChunkORM.source_id == source.id,
+            RegulatoryChunkORM.source_sha256 == source.content_sha256,
+        )
+    )).scalar_one()
+    if chunk_count == 0:
+        raise HTTPException(status_code=409, detail="source_has_no_current_embedded_chunks")
+    source.status = "approved"
+    source.reviewer = str(context.attributes.get("sub", "platform-admin"))
+    await session.commit()
+    await audit_log.append(
+        session,
+        AuditEvent(
+            tenant_id=context.tenant_id,
+            actor=source.reviewer,
+            action="regulatory_source.approved",
+            resource_type="regulatory_source",
+            resource_id=str(source.id),
+            purpose="operations",
+            trace_id=request.headers.get("traceparent", "local-trace"),
+            details={"official_url": source.official_url, "content_sha256": source.content_sha256,
+                     "chunk_count": chunk_count},
+        ),
+    )
+    return {"id": str(source.id), "status": source.status, "reviewer": source.reviewer,
+            "content_sha256": source.content_sha256, "chunk_count": chunk_count}
 
 
 @app.post("/v1/cases")
