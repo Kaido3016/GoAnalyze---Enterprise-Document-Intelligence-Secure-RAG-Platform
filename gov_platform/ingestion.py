@@ -31,7 +31,6 @@ from .models import (
     PipelineStage,
     StageResult,
 )
-from .rag import rag_service
 from .workflows import assignment_engine
 
 _ENTITY_PATTERN = re.compile(r"\b[A-Z][a-zA-Z]{2,}(?:\s[A-Z][a-zA-Z]{2,})*\b")
