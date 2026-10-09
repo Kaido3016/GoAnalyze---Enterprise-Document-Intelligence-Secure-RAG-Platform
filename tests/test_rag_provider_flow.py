@@ -1,4 +1,5 @@
 import re
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import gov_platform.rag as rag_module
