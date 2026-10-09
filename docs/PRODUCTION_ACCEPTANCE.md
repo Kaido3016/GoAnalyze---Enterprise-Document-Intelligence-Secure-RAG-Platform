@@ -19,7 +19,7 @@
 2. Configure GOV_EMBEDDING_BASE_URL, GOV_EMBEDDING_API_KEY, and GOV_EMBEDDING_MODEL in the secret manager; the endpoint must implement the OpenAI-compatible /embeddings contract.
 3. Seed the fixed official-source catalog with python -m gov_platform.regulatory_sources seed.
 4. Fetch and embed the allowlisted official pages with python -m gov_platform.regulatory_sources sync. The command verifies HTTPS and redirect host allowlists, stores a content SHA-256, captures an official consolidation date when present, and leaves every source in fetched_pending_review.
-5. A legal/domain reviewer must compare the stored content with the current official source, confirm jurisdiction and applicability, and then an authorized platform-admin can approve the exact version through POST /v1/regulatory-sources/{source_id}/approve.
+5. A legal/domain reviewer must compare the stored content with the current official source, confirm jurisdiction and applicability, and then an authorized platform-admin can approve the exact version through POST /v1/regulatory-sources/{source_id}/approve with source_version and a reviewer_note of at least 10 characters.
 6. A changed source hash resets it to pending review; retrieval only uses approved chunks whose hash still matches the current source record.
 7. Do not treat the five initial official sources as a complete regulatory corpus. Add jurisdiction-specific regulations and guidance only after source-authority, versioning, applicability and licensing review.
 
