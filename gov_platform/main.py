@@ -420,7 +420,7 @@ async def rag_answer(
         AuditEvent(
             tenant_id=context.tenant_id,
             actor=context.attributes.get("sub", "api-user"),
-            action="rag.answer_generated",
+            action="rag.answer_generated" if finding.grounded else "rag.answer_unavailable",
             resource_type="rag_query",
             resource_id=",".join(str(cid) for cid in document_ids) or "none",
             purpose=request.headers.get("x-purpose", "case-review"),
