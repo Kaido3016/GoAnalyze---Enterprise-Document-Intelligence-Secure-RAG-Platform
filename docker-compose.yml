@@ -21,6 +21,12 @@ services:
       GOV_TEMPORAL_TARGET_HOST: temporal:7233
       GOV_KEYCLOAK_ISSUER: ${GOV_KEYCLOAK_ISSUER:-http://keycloak:8080/realms/goanalyze}
       GOV_KEYCLOAK_AUDIENCE: ${GOV_KEYCLOAK_AUDIENCE:-goanalyze-api}
+      GOV_EMBEDDING_BASE_URL: ${GOV_EMBEDDING_BASE_URL:-}
+      GOV_EMBEDDING_API_KEY: ${GOV_EMBEDDING_API_KEY:-}
+      GOV_EMBEDDING_MODEL: ${GOV_EMBEDDING_MODEL:-text-embedding-3-small}
+      GOV_LLM_BASE_URL: ${GOV_LLM_BASE_URL:-}
+      GOV_LLM_API_KEY: ${GOV_LLM_API_KEY:-}
+      GOV_LLM_MODEL: ${GOV_LLM_MODEL:-gpt-4.1-mini}
       GOV_ALLOW_INSECURE_DEV_AUTH: ${GOV_ALLOW_INSECURE_DEV_AUTH:-false}
       GOV_AUDIT_HASH_SECRET: ${GOV_AUDIT_HASH_SECRET:?set GOV_AUDIT_HASH_SECRET to a strong, unique value - never commit a real value}
       GOV_ALLOWED_ORIGINS: ${GOV_ALLOWED_ORIGINS:-["http://localhost:3000"]}
