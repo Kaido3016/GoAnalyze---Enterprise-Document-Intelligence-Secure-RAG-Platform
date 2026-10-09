@@ -102,6 +102,7 @@ class MinioObjectStorage:
         from minio.error import S3Error
 
         try:
+            self._ensure_bucket_sync()
             self._client.stat_object(self._bucket, key)
             return True
         except S3Error as exc:
