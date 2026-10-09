@@ -2,7 +2,7 @@ from urllib.parse import urlparse
 
 import httpx
 import pytest
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import gov_platform.regulatory_sources as sources
