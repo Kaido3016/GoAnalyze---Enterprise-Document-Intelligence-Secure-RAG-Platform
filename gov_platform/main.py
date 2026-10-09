@@ -34,6 +34,7 @@ from .models import (
     SetupConfiguration,
     SetupConfigurationResult,
     ProcessingJobSummary,
+    RegulatorySourceApprovalRequest,
     TenantContext,
 )
 from .rag import rag_service
@@ -583,6 +584,7 @@ async def list_regulatory_sources(
 @app.post("/v1/regulatory-sources/{source_id}/approve")
 async def approve_regulatory_source(
     source_id: UUID,
+    payload: RegulatorySourceApprovalRequest,
     request: Request,
     context: TenantContext = Depends(get_current_context),
     session: AsyncSession = Depends(get_session),
@@ -603,6 +605,7 @@ async def approve_regulatory_source(
     if chunk_count == 0:
         raise HTTPException(status_code=409, detail="source_has_no_current_embedded_chunks")
     source.status = "approved"
+    source.source_version = payload.source_version
     source.reviewer = str(context.attributes.get("sub", "platform-admin"))
     await session.commit()
     await audit_log.append(
@@ -615,8 +618,9 @@ async def approve_regulatory_source(
             resource_id=str(source.id),
             purpose="operations",
             trace_id=request.headers.get("traceparent", "local-trace"),
-            details={"official_url": source.official_url, "content_sha256": source.content_sha256,
-                     "chunk_count": chunk_count},
+            details={"official_url": source.official_url, "source_version": source.source_version,
+                     "content_sha256": source.content_sha256, "chunk_count": chunk_count,
+                     "reviewer_note": payload.reviewer_note},
         ),
     )
     return {"id": str(source.id), "status": source.status, "reviewer": source.reviewer,
