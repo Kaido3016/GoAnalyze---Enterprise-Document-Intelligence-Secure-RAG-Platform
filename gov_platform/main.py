@@ -32,7 +32,7 @@ from .models import (
 from .rag import rag_service
 from .rate_limit import enforce_ip_rate_limit
 from .security import evaluate_abac, get_current_context
-from .storage import ObjectNotFoundError, ObjectStorageBackend, get_object_storage, storage_key
+from .storage import ObjectNotFoundError, ObjectStorageBackend, StorageUnavailableError, get_object_storage, storage_key
 from .workflows import assignment_engine
 
 settings = get_settings()
@@ -260,6 +260,20 @@ async def ready(session: AsyncSession = Depends(get_session)) -> Response:
     return Response(content='{"status":"ready"}', media_type="application/json", status_code=200)
 
 
+@app.exception_handler(StorageUnavailableError)
+async def storage_unavailable_handler(request: Request, exc: StorageUnavailableError) -> Response:
+    """Expose storage outages as a retryable service-unavailable response."""
+    logging.getLogger("gov_platform").error(
+        "Durable object storage unavailable on %s %s", request.method, request.url.path
+    )
+    return Response(
+        content='{"detail":"object_storage_unavailable"}',
+        media_type="application/json",
+        status_code=503,
+        headers={"Retry-After": "30"},
+    )
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> Response:
     """Never leak a bare framework error page or a stack trace to the
@@ -400,7 +414,9 @@ async def rag_answer(
             raise HTTPException(status_code=403, detail="citation_document_not_found")
         if record.tenant_id != context.tenant_id and "platform-admin" not in context.roles:
             raise HTTPException(status_code=403, detail="citation_tenant_mismatch")
-        if record.classification == "protected_b" and "protected-b-reader" not in context.roles:
+        if record.version != citation.version or record.sha256.lower() != citation.sha256.lower():
+            raise HTTPException(status_code=422, detail="citation_version_or_digest_mismatch")
+        if record.classification.value == "protected_b" and "protected-b-reader" not in context.roles:
             raise HTTPException(status_code=403, detail="protected_b_role_required")
 
     finding = rag_service.answer(question, citations)
