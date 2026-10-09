@@ -46,8 +46,8 @@ async def test_embedding_index_is_durable_in_database(db_session, monkeypatch):
 
 
 async def test_rag_fails_closed_without_configured_providers(db_session, monkeypatch):
-    from gov_platform.config import Settings
     import gov_platform.rag as rag_module
+    from gov_platform.config import Settings
 
     monkeypatch.setattr(
         rag_module,
