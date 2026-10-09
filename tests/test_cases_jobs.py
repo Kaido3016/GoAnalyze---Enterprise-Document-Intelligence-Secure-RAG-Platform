@@ -8,7 +8,7 @@ from gov_platform.db.models import ProcessingJobORM
 async def test_case_create_list_detail_are_tenant_scoped(client, patched_auth, rsa_keys):
     private_pem, _ = rsa_keys
     token_a = make_token(private_pem, tenant_id="ministry-a", roles=["case-manager"])
-    token_b = make_token(private_pem, tenant_id="ministry-b", roles=["case-manager"])
+    token_b = make_token(private_pem, tenant_id="ministry-b", roles=["case-manager"], sub="user-b")
     created = await client.post(
         "/v1/cases",
         headers={"Authorization": f"Bearer {token_a}"},
