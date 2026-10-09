@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .audit import audit_log
 from .environmental_engine import engine as compliance_engine
 from .extraction import ExtractionUnavailable, extract_document_text
-from .rag import ProviderUnavailable, rag_service
+from .rag import rag_service
 from .models import (
     AuditEvent,
     DocumentProcessingResult,
