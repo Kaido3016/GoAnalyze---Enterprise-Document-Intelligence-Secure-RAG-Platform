@@ -9,6 +9,7 @@ WORKDIR /app
 
 RUN apt-get update \
     && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 65532 appgroup \
     && useradd --uid 65532 --gid appgroup --no-create-home --shell /usr/sbin/nologin appuser
