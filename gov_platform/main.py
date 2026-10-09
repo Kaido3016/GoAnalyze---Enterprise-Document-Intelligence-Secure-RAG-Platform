@@ -33,7 +33,13 @@ from .models import (
 from .rag import rag_service
 from .rate_limit import enforce_ip_rate_limit
 from .security import evaluate_abac, get_current_context
-from .storage import ObjectNotFoundError, ObjectStorageBackend, StorageUnavailableError, get_object_storage, storage_key
+from .storage import (
+    ObjectNotFoundError,
+    ObjectStorageBackend,
+    StorageUnavailableError,
+    get_object_storage,
+    storage_key,
+)
 from .workflows import assignment_engine
 
 settings = get_settings()
@@ -351,9 +357,10 @@ async def submit_setup_configuration(payload: SetupConfiguration) -> SetupConfig
         warnings.append("azure_ad_credentials_incomplete")
     if payload.identity_provider == "microsoft_entra_id" and not payload.microsoft_entra_id_tenant_id:
         warnings.append("microsoft_entra_id_tenant_missing")
-    if payload.email_notifications_enabled:
-        if not (payload.email_smtp_host and payload.email_from_address):
-            warnings.append("email_notification_settings_incomplete")
+    if payload.email_notifications_enabled and not (
+        payload.email_smtp_host and payload.email_from_address
+    ):
+        warnings.append("email_notification_settings_incomplete")
     return SetupConfigurationResult(accepted=True, validated_components=validated, warnings=warnings)
 
 
