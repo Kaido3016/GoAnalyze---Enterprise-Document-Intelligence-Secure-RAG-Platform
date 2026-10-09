@@ -29,9 +29,7 @@ export default function DocumentsPage() {
   }
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     runSearch(1);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / data.page_size)) : 1;
