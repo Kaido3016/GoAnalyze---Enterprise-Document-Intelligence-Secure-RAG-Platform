@@ -29,6 +29,9 @@ async def test_pipeline_runs_all_ten_stages_in_order(db_session):
     )
 
     assert result.completed is True
+    stage_statuses = {stage.stage: stage for stage in result.stages}
+    assert stage_statuses[PipelineStage.compliance_analysis].status == "degraded"
+    assert stage_statuses[PipelineStage.vector_indexing].status == "skipped"
     stage_order = [stage.stage for stage in result.stages]
     assert stage_order == [
         PipelineStage.upload,
