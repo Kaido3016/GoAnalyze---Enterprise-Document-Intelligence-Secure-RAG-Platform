@@ -56,7 +56,13 @@ class _TextExtractor(HTMLParser):
 
 def _validate_official_url(url: str) -> None:
     parsed = urlparse(url)
-    if parsed.scheme != "https" or parsed.hostname not in ALLOWED_HOSTS:
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname not in ALLOWED_HOSTS
+        or parsed.port not in (None, 443)
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
         raise ValueError("regulatory_source_url_not_allowlisted")
 
 
