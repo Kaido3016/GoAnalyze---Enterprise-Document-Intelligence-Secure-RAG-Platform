@@ -481,9 +481,8 @@ async def environmental_review(
         for doc_id in payload.documents
         if doc_id in documents and documents[doc_id].metadata.get("document_type")
     }
-    # This endpoint currently has document metadata, but no persisted,
-    # verified extracted-text/chunk store. Filenames are not evidence, so do
-    # not fabricate citations or mark the checklist as grounded.
+    # The checklist is metadata-based only. Do not fabricate citations for it;
+    # the source-backed assessment below uses verified persisted chunks.
     citations: list[EvidenceCitation] = []
     result = engine.review(payload, available_types, citations)
     # A source-backed assessment is only surfaced as grounded when the model
@@ -499,7 +498,7 @@ async def environmental_review(
     jurisdiction = str(payload.attributes.get("jurisdiction", "")).upper()
     if jurisdiction in {"QC", "CA"}:
         assessment = await rag_service.answer(
-            assessment_question, context.tenant_id, context.roles, session, jurisdiction=jurisdiction
+            assessment_question, payload.tenant_id, context.roles, session, jurisdiction=jurisdiction
         )
     else:
         assessment = AIFinding(
