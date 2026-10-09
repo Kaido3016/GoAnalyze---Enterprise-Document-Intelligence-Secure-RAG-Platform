@@ -9,10 +9,14 @@ from __future__ import annotations
 
 import io
 import logging
+import zipfile
 
 logger = logging.getLogger(__name__)
 MAX_PDF_PAGES = 250
 MAX_EXTRACTED_CHARS = 2_000_000
+MAX_DOCX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
+MAX_DOCX_MEMBERS = 2000
+MAX_OCR_RENDER_PIXELS = 25_000_000
 MIN_SELECTABLE_CHARS_PER_PAGE = 24
 
 
@@ -71,6 +75,9 @@ def _ocr_pdf_page(data: bytes, page_number: int) -> str:
     try:
         pdf = pdfium.PdfDocument(data)
         page = pdf[page_number]
+        width, height = page.get_size()
+        if width * 1.8 * height * 1.8 > MAX_OCR_RENDER_PIXELS:
+            raise ExtractionUnavailable("pdf_page_render_pixel_limit_exceeded")
         bitmap = page.render(scale=1.8, rotation=0)
         image = bitmap.to_pil()
         return pytesseract.image_to_string(image, lang="eng", timeout=45)
@@ -97,6 +104,17 @@ def _ocr_image(data: bytes) -> str:
 
 
 def _extract_docx(data: bytes) -> str:
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            members = archive.infolist()
+            if len(members) > MAX_DOCX_MEMBERS:
+                raise ValueError("docx_member_limit_exceeded")
+            if sum(member.file_size for member in members) > MAX_DOCX_UNCOMPRESSED_BYTES:
+                raise ValueError("docx_uncompressed_size_limit_exceeded")
+            if any(member.file_size > MAX_DOCX_UNCOMPRESSED_BYTES for member in members):
+                raise ValueError("docx_member_size_limit_exceeded")
+    except zipfile.BadZipFile as exc:
+        raise ValueError("invalid_docx_archive") from exc
     try:
         from docx import Document
     except ImportError as exc:
