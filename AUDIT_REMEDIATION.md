@@ -11,6 +11,7 @@ This document records the remediation branch changes. It does not claim that the
 - **Storage fails closed.** MinIO initialization/connectivity failures no longer silently switch production writes to process-local memory. An in-memory fallback is permitted only in development when GOV_ALLOW_IN_MEMORY_STORAGE_FALLBACK=true; otherwise the API returns HTTP 503.
 - **Document API foundations.** Added tenant-scoped paginated GET /v1/documents and authorized GET /v1/documents/{document_id} endpoints.
 - **Environmental-review isolation.** Reviews reject missing documents and any document whose tenant does not match the review tenant; classification/purpose authorization is checked before evidence is used.
+- **No filename-as-evidence compliance claims.** Environmental review no longer fabricates citations from filenames. Rule-based checklists and regulation mappings are explicitly ungrounded until authoritative regulatory sources and verified extracted text are connected; pipeline compliance is marked degraded.
 - **Server-controlled object URI.** Ingestion replaces the client-provided URI with a server-derived internal object key.
 - **Bounded request reading.** Upload size is enforced as chunks arrive rather than after Request.body() has already buffered an arbitrarily large request.
 - **Setup response honesty.** /v1/setup no longer claims requested external services were validated. It explicitly warns that the endpoint does not persist settings or check connectivity.
