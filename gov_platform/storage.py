@@ -10,9 +10,8 @@ Two backends implement the same protocol:
 * ``MinioObjectStorage`` -- the real backend, using the official ``minio``
   SDK against ``settings.minio_endpoint`` (S3-compatible; works against real
   MinIO or AWS S3 unchanged).
-* ``InMemoryObjectStorage`` -- a process-local fallback used automatically
-  when MinIO is unreachable (so the API keeps working, e.g. in this sandbox
-  or a partial-outage scenario) and directly in unit tests.
+* ``InMemoryObjectStorage`` -- process-local storage for tests and explicitly
+  opted-in local development only. It is never a silent production fallback.
 """
 
 from __future__ import annotations
@@ -32,6 +31,10 @@ logger = logging.getLogger(__name__)
 
 class ObjectNotFoundError(Exception):
     pass
+
+
+class StorageUnavailableError(RuntimeError):
+    """Configured durable storage is unavailable; writes must not be acknowledged."""
 
 
 class ObjectStorageBackend(Protocol):
@@ -139,20 +142,34 @@ def _minio_backend_or_none() -> MinioObjectStorage | None:
             secure=settings.minio_secure,
         )
     except Exception:  # pragma: no cover - defensive, e.g. malformed endpoint
-        logger.warning("MinIO backend unavailable, falling back to in-memory object storage", exc_info=True)
+        logger.error("MinIO client could not be initialized", exc_info=True)
         return None
 
 
 async def get_object_storage() -> ObjectStorageBackend:
-    """FastAPI dependency: real MinIO backend, or the in-memory fallback if
-    MinIO is not configured/reachable. Tests override this dependency
-    directly with a fresh ``InMemoryObjectStorage()`` instance."""
+    """Resolve durable storage, permitting volatile fallback only by explicit opt-in.
+
+    Tests should inject a fresh ``InMemoryObjectStorage()`` through FastAPI's
+    dependency overrides. A production outage must surface as unavailable rather
+    than silently accepting data into a process-local dictionary.
+    """
+    settings = get_settings()
+
+    def development_fallback(reason: str) -> ObjectStorageBackend:
+        if settings.environment.lower() == "development" and settings.allow_in_memory_storage_fallback:
+            logger.warning("Using explicitly enabled in-memory development storage: %s", reason)
+            return _fallback_store
+        raise StorageUnavailableError(
+            "Durable object storage is unavailable. Configure MinIO/S3; "
+            "volatile fallback is disabled."
+        )
+
     backend = _minio_backend_or_none()
     if backend is None:
-        return _fallback_store
+        return development_fallback("MinIO is not configured or could not be initialized")
     try:
         await backend.exists("__connectivity_probe__")
         return backend
-    except Exception:
-        logger.warning("MinIO not reachable, falling back to in-memory object storage", exc_info=True)
-        return _fallback_store
+    except Exception as exc:
+        logger.error("MinIO connectivity check failed", exc_info=True)
+        return development_fallback(type(exc).__name__)
