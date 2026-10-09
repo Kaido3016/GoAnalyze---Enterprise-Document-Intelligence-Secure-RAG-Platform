@@ -809,6 +809,34 @@ async def enqueue_document_processing(
             "created_at": job.created_at.isoformat(), "poll_url": f"/v1/jobs/{job.id}"}
 
 
+@app.post("/v1/jobs/{job_id}/retry", status_code=202)
+async def retry_processing_job(
+    job_id: UUID,
+    context: TenantContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    if "case-manager" not in context.roles and "tenant-admin" not in context.roles:
+        raise HTTPException(status_code=403, detail="case_manager_role_required")
+    job = (await session.execute(
+        select(ProcessingJobORM).where(
+            ProcessingJobORM.id == job_id,
+            ProcessingJobORM.tenant_id == context.tenant_id,
+        )
+    )).scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    if job.status != "failed":
+        raise HTTPException(status_code=409, detail="only_failed_jobs_can_be_retried")
+    if job.attempts >= 3:
+        raise HTTPException(status_code=409, detail="job_retry_limit_reached")
+    job.status = "queued"
+    job.error_code = None
+    job.started_at = None
+    job.finished_at = None
+    await session.commit()
+    return {"id": str(job.id), "status": job.status, "attempts": job.attempts}
+
+
 @app.get("/v1/jobs/{job_id}", response_model=ProcessingJobSummary)
 async def get_processing_job(
     job_id: UUID,
