@@ -107,3 +107,101 @@ class AuditChainStateORM(Base):
 
     tenant_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     latest_event_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+class CaseORM(Base):
+    __tablename__ = "cases"
+    __table_args__ = (
+        Index("ix_cases_tenant_created", "tenant_id", "created_at"),
+        Index("ix_cases_tenant_status", "tenant_id", "status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    tenant_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    project_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    location: Mapped[str] = mapped_column(String(512), nullable=False)
+    applicant: Mapped[str] = mapped_column(String(512), nullable=False)
+    status: Mapped[str] = mapped_column(String(64), nullable=False, default="intake")
+    risk_score: Mapped[float | None] = mapped_column(nullable=True)
+    recommendation: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    attributes: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False)
+
+
+class DocumentChunkORM(Base):
+    __tablename__ = "document_chunks"
+    __table_args__ = (
+        Index("ix_document_chunks_tenant_document", "tenant_id", "document_id"),
+        Index("ix_document_chunks_tenant_classification", "tenant_id", "classification"),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    tenant_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    document_id: Mapped[UUID] = mapped_column(nullable=False)
+    document_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    document_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    classification: Mapped[str] = mapped_column(String(64), nullable=False)
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    content: Mapped[str] = mapped_column(String, nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(JSON, nullable=False)
+    embedding_model: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class ProcessingJobORM(Base):
+    __tablename__ = "processing_jobs"
+    __table_args__ = (
+        Index("ix_processing_jobs_status_created", "status", "created_at"),
+        Index("ix_processing_jobs_tenant_created", "tenant_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    tenant_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    document_id: Mapped[UUID] = mapped_column(nullable=False)
+    actor: Mapped[str] = mapped_column(String(255), nullable=False)
+    trace_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class RegulatorySourceORM(Base):
+    __tablename__ = "regulatory_sources"
+    __table_args__ = (
+        Index("ix_regulatory_sources_jurisdiction_status", "jurisdiction", "status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    jurisdiction: Mapped[str] = mapped_column(String(64), nullable=False)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    official_url: Mapped[str] = mapped_column(String(2048), nullable=False, unique=True)
+    authority_domain: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_version: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(64), nullable=False, default="catalogued_not_ingested")
+    content_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    content_text: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewer: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class RegulatoryChunkORM(Base):
+    __tablename__ = "regulatory_chunks"
+    __table_args__ = (Index("ix_regulatory_chunks_source", "source_id"),)
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    source_id: Mapped[UUID] = mapped_column(nullable=False)
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(String, nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(JSON, nullable=False)
+    embedding_model: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)

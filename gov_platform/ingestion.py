@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .audit import audit_log
 from .environmental_engine import engine as compliance_engine
+from .extraction import ExtractionUnavailable, extract_document_text
 from .models import (
     AuditEvent,
     DocumentProcessingResult,
@@ -52,17 +53,15 @@ DOCUMENT_TYPE_KEYWORDS: dict[str, tuple[str, ...]] = {
 
 
 class OcrEngine(Protocol):
-    def extract_text(self, object_uri: str, content_type: str) -> str:
+    def extract_text(self, data: bytes, content_type: str, filename: str) -> str:
         ...
 
 
-class NullOcrEngine:
-    """Default OCR engine used until an enterprise OCR engine is configured
-    through the setup wizard. Returns an empty text body rather than making
-    any assumption about document content."""
+class DocumentOcrEngine:
+    """Extract text from native files and OCR scanned PDFs/images."""
 
-    def extract_text(self, object_uri: str, content_type: str) -> str:
-        return ""
+    def extract_text(self, data: bytes, content_type: str, filename: str) -> str:
+        return extract_document_text(data, content_type, filename)
 
 
 @dataclass
@@ -77,13 +76,14 @@ class IngestionPipeline:
         purpose: str,
         session: AsyncSession,
         raw_text: str | None = None,
+        raw_bytes: bytes | None = None,
     ) -> DocumentProcessingResult:
         result = DocumentProcessingResult(document_id=record.id)
 
         result.stages.append(self._timed(PipelineStage.upload, self._stage_upload, record))
 
         ocr_stage, text = self._timed_with_output(
-            PipelineStage.ocr, self._stage_ocr, record, raw_text
+            PipelineStage.ocr, self._stage_ocr, record, raw_text, raw_bytes
         )
         result.stages.append(ocr_stage)
 
@@ -110,6 +110,7 @@ class IngestionPipeline:
             record,
             label,
             metadata,
+            text,
         )
         result.stages.append(compliance_stage)
 
@@ -119,8 +120,24 @@ class IngestionPipeline:
         result.stages.append(risk_stage)
         result.risk_score = risk_score
 
-        index_stage = self._timed(PipelineStage.vector_indexing, self._stage_vector_index, record, text)
-        result.stages.append(index_stage)
+        index_started = time.perf_counter()
+        try:
+            index_output = await rag_service.index_document(record, text, session)
+        except Exception as exc:  # noqa: BLE001 - keep pipeline alive and mark optional indexing degraded
+            index_output = {
+                "indexed": False,
+                "reason": f"indexing_failed:{type(exc).__name__}",
+                "__stage_status": "degraded",
+            }
+        index_status = index_output.pop("__stage_status", "completed")
+        result.stages.append(
+            StageResult(
+                stage=PipelineStage.vector_indexing,
+                status=index_status,
+                output=index_output,
+                duration_ms=(time.perf_counter() - index_started) * 1000,
+            )
+        )
 
         workflow_stage, queue = self._timed_with_output(
             PipelineStage.workflow_engine, self._stage_workflow, record, risk_score
@@ -134,6 +151,11 @@ class IngestionPipeline:
         result.stages.append(audit_stage)
 
         result.completed = True
+        result.status = (
+            "completed_with_warnings"
+            if any(stage.status in {"skipped", "degraded", "failed"} for stage in result.stages)
+            else "completed"
+        )
         return result
 
     # -- stage implementations -------------------------------------------------
@@ -141,13 +163,41 @@ class IngestionPipeline:
     def _stage_upload(self, record: DocumentRecord) -> dict[str, Any]:
         return {"object_uri": record.object_uri, "sha256": record.sha256}
 
-    def _stage_ocr(self, record: DocumentRecord, raw_text: str | None) -> tuple[dict[str, Any], str]:
-        text = raw_text if raw_text is not None else self.ocr_engine.extract_text(
-            record.object_uri, record.content_type
-        )
-        return {"character_count": len(text)}, text
+    def _stage_ocr(
+        self, record: DocumentRecord, raw_text: str | None, raw_bytes: bytes | None
+    ) -> tuple[dict[str, Any], str]:
+        if raw_text is not None:
+            text = raw_text
+        elif raw_bytes is not None:
+            try:
+                text = self.ocr_engine.extract_text(raw_bytes, record.content_type, record.filename)
+            except (ExtractionUnavailable, ValueError) as exc:
+                return {
+                    "character_count": 0,
+                    "reason": str(exc),
+                    "__stage_status": "degraded",
+                }, ""
+        else:
+            return {
+                "character_count": 0,
+                "reason": "document_bytes_not_available",
+                "__stage_status": "skipped",
+            }, ""
+        if not text.strip():
+            return {
+                "character_count": 0,
+                "reason": "no_text_extracted",
+                "__stage_status": "degraded" if raw_bytes is not None else "skipped",
+            }, text
+        return {"character_count": len(text), "extraction_method": "native_or_ocr"}, text
 
     def _stage_classify(self, text: str) -> tuple[dict[str, Any], str]:
+        if not text.strip():
+            return {
+                "label": "uncategorized",
+                "reason": "source_text_unavailable",
+                "__stage_status": "skipped",
+            }, "uncategorized"
         lowered = text.lower()
         best_label = "uncategorized"
         best_score = 0
@@ -166,12 +216,23 @@ class IngestionPipeline:
         return metadata, metadata
 
     def _stage_entities(self, text: str) -> tuple[dict[str, Any], list[str]]:
+        if not text.strip():
+            return {
+                "entity_count": 0,
+                "reason": "source_text_unavailable",
+                "__stage_status": "skipped",
+            }, []
         entities = sorted(set(_ENTITY_PATTERN.findall(text)))[:25]
         return {"entity_count": len(entities)}, entities
 
     def _stage_compliance(
-        self, record: DocumentRecord, label: str, metadata: dict[str, Any]
+        self, record: DocumentRecord, label: str, metadata: dict[str, Any], text: str
     ) -> tuple[dict[str, Any], dict[str, Any]]:
+        if not text.strip():
+            return {
+                "reason": "source_text_unavailable; compliance was not assessed",
+                "__stage_status": "skipped",
+            }, {"risk_score": None, "review": None}
         available_types = {label} if label != "uncategorized" else set()
         review_request = EnvironmentalReviewRequest(
             tenant_id=record.tenant_id,
@@ -187,30 +248,31 @@ class IngestionPipeline:
                 version=record.version,
                 chunk_id="0",
                 sha256=record.sha256,
-                excerpt=metadata.get("filename", record.filename),
+                excerpt=text[:600],
             )
         ]
         review = compliance_engine.review(review_request, available_types, citations)
-        return review.model_dump(mode="json"), {"risk_score": review.risk_score, "review": review}
+        stage_output = review.model_dump(mode="json")
+        stage_output["reason"] = (
+            "rule_based_checklist_only; authoritative regulatory-source retrieval is not configured"
+        )
+        stage_output["__stage_status"] = "degraded"
+        return stage_output, {"risk_score": review.risk_score, "review": review}
 
-    def _stage_risk(self, compliance_output: dict[str, Any]) -> tuple[dict[str, Any], float]:
+    def _stage_risk(self, compliance_output: dict[str, Any]) -> tuple[dict[str, Any], float | None]:
+        if compliance_output.get("risk_score") is None:
+            return {
+                "reason": "compliance_analysis_unavailable",
+                "__stage_status": "skipped",
+            }, None
         risk_score = float(compliance_output["risk_score"])
         return {"risk_score": risk_score}, risk_score
 
-    def _stage_vector_index(self, record: DocumentRecord, text: str) -> dict[str, Any]:
-        citation = EvidenceCitation(
-            document_id=record.id,
-            version=record.version,
-            chunk_id="0",
-            sha256=record.sha256,
-            excerpt=text[:600] if text else record.filename,
-        )
-        finding = rag_service.answer(question="__index__", citations=[citation])
-        return {"indexed": True, "grounded": finding.grounded}
-
-    def _stage_workflow(self, record: DocumentRecord, risk_score: float) -> tuple[dict[str, Any], str]:
+    def _stage_workflow(self, record: DocumentRecord, risk_score: float | None) -> tuple[dict[str, Any], str]:
         workload = {"technical-review-pool": 4, "senior-review-pool": 1}
-        skill = "senior-review" if risk_score >= 70 else "technical-review"
+        # Missing evidence is routed to senior review, not assigned an invented
+        # numeric risk score or treated as low risk.
+        skill = "senior-review" if risk_score is None or risk_score >= 70 else "technical-review"
         assignment = assignment_engine.assign(record.case_id or record.id, skill, workload)
         return {
             "assignee": assignment.assignee,
@@ -252,7 +314,9 @@ class IngestionPipeline:
         start = time.perf_counter()
         output = fn(*args)
         duration_ms = (time.perf_counter() - start) * 1000
-        return StageResult(stage=stage, output=output if isinstance(output, dict) else {}, duration_ms=duration_ms)
+        stage_output = output if isinstance(output, dict) else {}
+        status = stage_output.pop("__stage_status", "completed")
+        return StageResult(stage=stage, status=status, output=stage_output, duration_ms=duration_ms)
 
     async def _timed_async(self, stage: PipelineStage, fn, *args) -> StageResult:
         start = time.perf_counter()
@@ -264,7 +328,8 @@ class IngestionPipeline:
         start = time.perf_counter()
         stage_output, value = fn(*args)
         duration_ms = (time.perf_counter() - start) * 1000
-        return StageResult(stage=stage, output=stage_output, duration_ms=duration_ms), value
+        status = stage_output.pop("__stage_status", "completed")
+        return StageResult(stage=stage, status=status, output=stage_output, duration_ms=duration_ms), value
 
 
-ingestion_pipeline = IngestionPipeline(ocr_engine=NullOcrEngine())
+ingestion_pipeline = IngestionPipeline(ocr_engine=DocumentOcrEngine())

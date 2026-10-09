@@ -267,6 +267,20 @@ The repository includes technical documentation covering:
 
 See the corresponding Markdown files in the repository for the detailed engineering and operational documentation.
 
+## Implemented pipeline and honest capability boundaries
+
+The remediation branch adds the following concrete paths:
+
+- **Extraction/OCR:** selectable PDF text, scanned-PDF OCR through PDFium + Tesseract, DOCX paragraphs/tables, plain text and common image OCR. Page count, rendered-pixel count, DOCX archive size/member count, and extracted text are bounded. Tesseract English/French language data are installed in the production image and configurable through GOV_OCR_LANGUAGES.
+- **Embeddings and RAG:** configure an OpenAI-compatible embeddings endpoint and chat-completions endpoint using the GOV_EMBEDDING_* and GOV_LLM_* environment variables. Ingestion chunks extracted text, persists embeddings and document version/SHA-256 metadata in PostgreSQL, retrieves only tenant-authorized current-version chunks, and rejects missing or forged citation markers. If a provider is absent, the API reports that grounded generation is unavailable.
+- **Vector scale:** similarity ranking currently scans the authorized persisted chunk set in application memory. This provides real vector retrieval for modest corpora, but it is not a high-scale ANN index. Use pgvector/HNSW or OpenSearch k-NN and benchmark before large production corpora.
+- **Regulatory sources:** the initial catalog points to official Québec and Canadian legislation sites. Run python -m gov_platform.regulatory_sources seed and then python -m gov_platform.regulatory_sources sync after configuring embeddings. Downloaded source versions remain pending human review. A platform administrator must approve the exact source version and provide a review rationale before it can be retrieved for regulatory assessments.
+- **Cases and processing:** tenant-scoped case create/list/detail endpoints and aggregate analytics are persisted in PostgreSQL. POST /v1/documents/{id}/process-async enqueues a durable job; run python -m gov_platform.worker as a separate service. Job status is available from GET /v1/jobs/{id}; failed jobs can be retried by authorized case managers.
+- **Risk decisions:** numeric risk scores are intentionally unavailable until a representative expert-labeled dataset and calibrated model are validated. The rule-based checklist and LLM output are decision support only, not legal conclusions or automatic compliance determinations.
+- **Frontend dependencies:** Next.js/React are upgraded, the npm lockfile is regenerated in CI, and the remediation workflow runs npm audit. CI also uses npm ci and TypeScript typechecking.
+
+For local setup, copy .env.example to .env, set strong local secrets and provider keys only in the ignored .env file, apply alembic upgrade head, and run the API and document worker. For production identity, regulatory source review, backups/restore drills, independent security assessment and go-live gates, follow docs/PRODUCTION_ACCEPTANCE.md and docs/SECURITY_TEST_PLAN.md.
+
 ## Production Readiness Boundary
 
 GoAnalyze is a **technical portfolio and engineering demonstration**. The presence of production-oriented infrastructure does not by itself establish production certification, government approval, customer deployment, security accreditation, or compliance.

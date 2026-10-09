@@ -1,0 +1,60 @@
+name: Refresh frontend lockfile (remediation branch)
+
+on:
+  push:
+    branches:
+      - fix/goanalyze-audit-remediation
+    paths:
+      - frontend/package.json
+
+permissions:
+  contents: write
+
+concurrency:
+  group: frontend-lock-refresh
+  cancel-in-progress: false
+
+jobs:
+  lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Regenerate lockfile from reviewed manifest
+        working-directory: frontend
+        run: |
+          rm -f package-lock.json
+          npm install --package-lock-only --ignore-scripts --no-audit
+      - name: Apply compatible advisory fixes
+        working-directory: frontend
+        shell: bash
+        run: |
+          set +e
+          npm audit fix --package-lock-only --ignore-scripts
+          fix_status=$?
+          set -e
+          echo "npm audit fix exit status: ${fix_status}" >> "$GITHUB_STEP_SUMMARY"
+      - name: Commit regenerated lockfile
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add frontend/package-lock.json
+          if git diff --cached --quiet; then
+            echo "Lockfile already matches the manifest."
+          else
+            git commit -m "Regenerate frontend lockfile and apply compatible security fixes"
+            git fetch origin "${GITHUB_REF_NAME}"
+            git rebase "origin/${GITHUB_REF_NAME}"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+      - name: Enforce dependency audit
+        working-directory: frontend
+        run: npm audit --audit-level=high

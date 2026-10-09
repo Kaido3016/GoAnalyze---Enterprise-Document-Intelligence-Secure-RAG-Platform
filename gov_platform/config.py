@@ -25,11 +25,25 @@ class Settings(BaseSettings):
     redis_url: str = "redis://redis:6379/0"
     opensearch_url: str = "http://opensearch:9200"
     opensearch_index: str = "goanalyze-documents"
+    # OpenAI-compatible embeddings and chat-completions endpoints. These are
+    # optional in development, but RAG returns unavailable until configured.
+    embedding_base_url: str | None = None
+    embedding_api_key: str | None = None
+    embedding_model: str = "text-embedding-3-small"
+    llm_base_url: str | None = None
+    llm_api_key: str | None = None
+    llm_model: str = "gpt-4.1-mini"
+    rag_top_k: int = 5
+    rag_min_similarity: float = 0.15
+    ocr_languages: str = "eng+fra"
     minio_endpoint: str = "minio:9000"
     minio_access_key: str | None = None
     minio_secret_key: str | None = None
     minio_bucket: str = "goanalyze-documents"
     minio_secure: bool = False
+    # Volatile storage is an explicit local-development/test opt-in only.
+    # Production must never acknowledge writes that disappear on process restart.
+    allow_in_memory_storage_fallback: bool = False
     kafka_bootstrap_servers: str = "kafka:9092"
     temporal_target_host: str = "temporal:7233"
 
@@ -76,6 +90,14 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "GOV_ALLOW_INSECURE_DEV_AUTH must not be enabled in production."
                 )
+            for field_name in ("embedding_base_url", "llm_base_url"):
+                endpoint = getattr(self, field_name)
+                if endpoint and not str(endpoint).startswith("https://"):
+                    raise ValueError(f"{field_name} must use HTTPS in production.")
+            if self.embedding_base_url and not self.embedding_api_key:
+                raise ValueError("GOV_EMBEDDING_API_KEY is required when embeddings are configured.")
+            if self.llm_base_url and not self.llm_api_key:
+                raise ValueError("GOV_LLM_API_KEY is required when generation is configured.")
         return self
 
 

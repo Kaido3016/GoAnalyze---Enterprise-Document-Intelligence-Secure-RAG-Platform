@@ -1,0 +1,16 @@
+[
+  {
+    "case_id": "TEMPLATE-REPLACE-WITH-EXPERT-REVIEWED-CASE",
+    "jurisdiction": "QC",
+    "project_type": "industrial_discharge",
+    "expected_source_ids": ["replace-with-approved-official-source-id"],
+    "retrieved_source_ids": [],
+    "answer_grounded": false,
+    "answer_citation_ids": [],
+    "supported_citation_ids": [],
+    "gold_risk_score": null,
+    "predicted_risk_score": null,
+    "reviewer": null,
+    "review_date": null
+  }
+]

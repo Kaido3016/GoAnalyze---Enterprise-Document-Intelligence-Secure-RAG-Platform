@@ -29,6 +29,9 @@ async def test_pipeline_runs_all_ten_stages_in_order(db_session):
     )
 
     assert result.completed is True
+    stage_statuses = {stage.stage: stage for stage in result.stages}
+    assert stage_statuses[PipelineStage.compliance_analysis].status == "degraded"
+    assert stage_statuses[PipelineStage.vector_indexing].status == "skipped"
     stage_order = [stage.stage for stage in result.stages]
     assert stage_order == [
         PipelineStage.upload,
@@ -44,7 +47,7 @@ async def test_pipeline_runs_all_ten_stages_in_order(db_session):
     ]
 
 
-async def test_pipeline_classifies_and_scores_risk_from_text(db_session):
+async def test_pipeline_classifies_but_does_not_invent_unvalidated_risk(db_session):
     record = _make_record()
 
     result = await ingestion_pipeline.run(
@@ -57,8 +60,8 @@ async def test_pipeline_classifies_and_scores_risk_from_text(db_session):
     )
 
     assert result.classification_label == "application_form"
-    assert result.risk_score is not None
-    assert result.workflow_queue in {"technical-review-review", "senior-review-review"}
+    assert result.risk_score is None
+    assert result.workflow_queue == "senior-review-review"
 
 
 async def test_pipeline_handles_empty_text_without_error(db_session):
@@ -74,8 +77,16 @@ async def test_pipeline_handles_empty_text_without_error(db_session):
     )
 
     assert result.completed is True
+    assert result.status == "completed_with_warnings"
     assert result.classification_label == "uncategorized"
     assert result.extracted_entities == []
+    assert result.risk_score is None
+    stages = {stage.stage: stage for stage in result.stages}
+    assert stages[PipelineStage.ocr].status == "skipped"
+    assert stages[PipelineStage.compliance_analysis].status == "skipped"
+    assert stages[PipelineStage.risk_scoring].status == "skipped"
+    assert stages[PipelineStage.vector_indexing].status == "skipped"
+    assert stages[PipelineStage.vector_indexing].output["indexed"] is False
 
 
 async def test_pipeline_appends_hash_chained_audit_event(db_session):

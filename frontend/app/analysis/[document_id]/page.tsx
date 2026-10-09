@@ -25,7 +25,6 @@ export default function AnalysisPage() {
   const [filename, setFilename] = useState<string | null>(null);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setFilename(getCachedDocument(documentId)?.filename ?? null);
   }, [documentId]);
 

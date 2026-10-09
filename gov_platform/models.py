@@ -50,14 +50,17 @@ class DocumentRecord(DocumentIngestRequest):
 
 
 class EvidenceCitation(BaseModel):
-    document_id: UUID
-    version: int
+    document_id: UUID | None = None
+    version: int = 1
     chunk_id: str
     page: int | None = None
     start_offset: int | None = None
     end_offset: int | None = None
-    sha256: str
+    sha256: str = ""
     excerpt: str
+    regulatory_source_id: UUID | None = None
+    source_title: str | None = None
+    source_url: str | None = None
 
 
 class AIFinding(BaseModel):
@@ -69,14 +72,57 @@ class AIFinding(BaseModel):
     explanation: str
 
 
-class EnvironmentalReviewRequest(BaseModel):
+class CaseCreateRequest(BaseModel):
+    title: str = Field(min_length=3, max_length=512)
+    project_type: str = Field(min_length=2, max_length=128)
+    location: str = Field(min_length=2, max_length=512)
+    applicant: str = Field(min_length=2, max_length=512)
+    attributes: dict[str, Any] = Field(default_factory=dict)
+
+
+class CaseSummary(BaseModel):
+    id: UUID
     tenant_id: str
-    case_id: UUID
+    title: str
     project_type: str
     location: str
     applicant: str
-    documents: list[UUID]
+    status: str
+    risk_score: float | None = None
+    recommendation: str | None = None
     attributes: dict[str, Any] = Field(default_factory=dict)
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+    document_count: int = 0
+
+
+class RegulatorySourceApprovalRequest(BaseModel):
+    source_version: str = Field(min_length=1, max_length=255)
+    reviewer_note: str = Field(min_length=10, max_length=2000)
+
+
+class ProcessingJobSummary(BaseModel):
+    id: UUID
+    tenant_id: str
+    document_id: UUID
+    status: str
+    attempts: int
+    error_code: str | None = None
+    result: dict[str, Any] | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class EnvironmentalReviewRequest(BaseModel):
+    tenant_id: str = Field(min_length=1, max_length=255)
+    case_id: UUID
+    project_type: str = Field(min_length=2, max_length=128)
+    location: str = Field(min_length=2, max_length=512)
+    applicant: str = Field(min_length=2, max_length=512)
+    documents: list[UUID] = Field(max_length=100)
+    attributes: dict[str, Any] = Field(default_factory=dict, max_length=100)
 
 
 class EnvironmentalReviewResult(BaseModel):
@@ -85,7 +131,7 @@ class EnvironmentalReviewResult(BaseModel):
     missing_documents: list[str]
     regulation_mappings: list[AIFinding]
     compliance_findings: list[AIFinding]
-    risk_score: float = Field(ge=0, le=100)
+    risk_score: float | None = Field(default=None, ge=0, le=100)
     recommendation: str
     justification: str
     requires_human_review: bool
@@ -151,6 +197,9 @@ class DocumentProcessingResult(BaseModel):
     risk_score: float | None = None
     workflow_queue: str | None = None
     completed: bool = False
+    # completed means orchestration terminated; this field communicates whether
+    # every requested capability actually ran or one or more stages were skipped.
+    status: str = "pending"
 
 
 class AuditEvent(BaseModel):

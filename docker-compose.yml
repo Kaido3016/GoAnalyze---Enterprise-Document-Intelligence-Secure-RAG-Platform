@@ -13,10 +13,20 @@ services:
       GOV_REDIS_URL: redis://redis:6379/0
       GOV_OPENSEARCH_URL: http://opensearch:9200
       GOV_MINIO_ENDPOINT: minio:9000
+      GOV_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+      GOV_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+      GOV_MINIO_BUCKET: ${GOV_MINIO_BUCKET:-goanalyze-documents}
+      GOV_MINIO_SECURE: "false"
       GOV_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       GOV_TEMPORAL_TARGET_HOST: temporal:7233
       GOV_KEYCLOAK_ISSUER: ${GOV_KEYCLOAK_ISSUER:-http://keycloak:8080/realms/goanalyze}
       GOV_KEYCLOAK_AUDIENCE: ${GOV_KEYCLOAK_AUDIENCE:-goanalyze-api}
+      GOV_EMBEDDING_BASE_URL: ${GOV_EMBEDDING_BASE_URL:-}
+      GOV_EMBEDDING_API_KEY: ${GOV_EMBEDDING_API_KEY:-}
+      GOV_EMBEDDING_MODEL: ${GOV_EMBEDDING_MODEL:-text-embedding-3-small}
+      GOV_LLM_BASE_URL: ${GOV_LLM_BASE_URL:-}
+      GOV_LLM_API_KEY: ${GOV_LLM_API_KEY:-}
+      GOV_LLM_MODEL: ${GOV_LLM_MODEL:-gpt-4.1-mini}
       GOV_ALLOW_INSECURE_DEV_AUTH: ${GOV_ALLOW_INSECURE_DEV_AUTH:-false}
       GOV_AUDIT_HASH_SECRET: ${GOV_AUDIT_HASH_SECRET:?set GOV_AUDIT_HASH_SECRET to a strong, unique value - never commit a real value}
       GOV_ALLOWED_ORIGINS: ${GOV_ALLOWED_ORIGINS:-["http://localhost:3000"]}
@@ -31,12 +41,40 @@ services:
       opensearch:
         condition: service_healthy
       minio:
-        condition: service_healthy
+        condition: service_started
       kafka:
         condition: service_started
       temporal:
         condition: service_started
       keycloak:
+        condition: service_started
+    networks: [app]
+
+  document-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "gov_platform.worker"]
+    restart: unless-stopped
+    environment:
+      GOV_ENVIRONMENT: ${GOV_ENVIRONMENT:?set GOV_ENVIRONMENT (development|staging|production)}
+      GOV_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB}
+      GOV_MINIO_ENDPOINT: minio:9000
+      GOV_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+      GOV_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+      GOV_MINIO_BUCKET: ${GOV_MINIO_BUCKET:-goanalyze-documents}
+      GOV_MINIO_SECURE: "false"
+      GOV_AUDIT_HASH_SECRET: ${GOV_AUDIT_HASH_SECRET:?set GOV_AUDIT_HASH_SECRET}
+      GOV_EMBEDDING_BASE_URL: ${GOV_EMBEDDING_BASE_URL:-}
+      GOV_EMBEDDING_API_KEY: ${GOV_EMBEDDING_API_KEY:-}
+      GOV_EMBEDDING_MODEL: ${GOV_EMBEDDING_MODEL:-text-embedding-3-small}
+      GOV_LLM_BASE_URL: ${GOV_LLM_BASE_URL:-}
+      GOV_LLM_API_KEY: ${GOV_LLM_API_KEY:-}
+      GOV_LLM_MODEL: ${GOV_LLM_MODEL:-gpt-4.1-mini}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
         condition: service_started
     networks: [app]
 
@@ -99,8 +137,19 @@ services:
       - opensearchdata:/usr/share/opensearch/data
     networks: [app]
 
+  # Initialize the named volume for the non-root Chainguard MinIO user.
+  minio-init:
+    image: busybox:1.37
+    user: "0:0"
+    command: ["sh", "-c", "chown -R 65532:65532 /data"]
+    volumes:
+      - miniodata:/data
+    restart: "no"
+    networks: [app]
+
   minio:
-    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    # Local/demo only. Production should use an approved managed S3 service.
+    image: ${MINIO_IMAGE:-cgr.dev/chainguard/minio:latest}
     restart: unless-stopped
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
@@ -111,11 +160,9 @@ services:
       - "127.0.0.1:9001:9001"
     volumes:
       - miniodata:/data
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
     networks: [app]
 
   zookeeper:

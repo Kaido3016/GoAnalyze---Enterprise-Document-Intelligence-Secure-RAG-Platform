@@ -17,7 +17,6 @@ function CallbackInner() {
     const errorDescription = searchParams.get("error_description");
 
     if (errorParam) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setError(errorDescription || `Keycloak returned an error: ${errorParam}`);
       return;
     }

@@ -142,7 +142,7 @@ async def test_rag_answer_requires_authentication(client):
     assert response.status_code == 401
 
 
-async def test_rag_answer_rejects_citation_from_other_tenant(client, rsa_keys):
+async def test_rag_answer_ignores_caller_supplied_cross_tenant_citations(client, rsa_keys):
     private_pem, _ = rsa_keys
     owner_token = _token(private_pem, "ministry-a", ["case-reviewer"])
     attacker_token = _token(private_pem, "ministry-b", ["case-reviewer"], sub="attacker-1")
@@ -175,11 +175,13 @@ async def test_rag_answer_rejects_citation_from_other_tenant(client, rsa_keys):
             }
         ],
     )
-    assert response.status_code == 403
-    assert response.json()["detail"] == "citation_tenant_mismatch"
+    assert response.status_code == 200
+    assert response.json()["grounded"] is False
+    assert response.json()["citations"] == []
+    assert "forged excerpt" not in response.text
 
 
-async def test_rag_answer_allows_citation_from_own_tenant(client, rsa_keys):
+async def test_rag_answer_uses_retrieved_evidence_not_caller_supplied_citations(client, rsa_keys):
     private_pem, _ = rsa_keys
     token = _token(private_pem, "ministry-a", ["case-reviewer"])
 
@@ -211,6 +213,8 @@ async def test_rag_answer_allows_citation_from_own_tenant(client, rsa_keys):
         ],
     )
     assert response.status_code == 200
+    assert response.json()["grounded"] is False
+    assert response.json()["citations"] == []
 
 
 async def test_audit_endpoint_only_returns_own_tenant_events(client, rsa_keys):

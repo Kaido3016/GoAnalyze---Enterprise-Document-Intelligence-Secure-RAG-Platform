@@ -41,7 +41,10 @@ services:
     networks: [platform]
 
   minio:
-    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    # MinIO's upstream community images are no longer anonymously pullable.
+    # This maintained Chainguard image is for local/CI only; production should
+    # use a customer-managed S3-compatible service and pin approved image digests.
+    image: cgr.dev/chainguard/minio:latest
     command: ["server", "/data"]
     environment:
       MINIO_ROOT_USER: phase13minio

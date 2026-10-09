@@ -1,29 +1,44 @@
 import hashlib
 import logging
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, generate_latest
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response, StreamingResponse
 
 from . import search as search_service
 from .audit import audit_log
 from .config import get_settings
+from .db.models import (
+    CaseAssignmentORM,
+    CaseORM,
+    DocumentORM,
+    ProcessingJobORM,
+    RegulatoryChunkORM,
+    RegulatorySourceORM,
+)
 from .db.repositories import CaseRepository, DocumentRepository
 from .db.session import get_session
 from .environmental_engine import engine
 from .ingestion import ingestion_pipeline
 from .models import (
+    AIFinding,
     AuditEvent,
     AuditEventListResponse,
+    CaseCreateRequest,
+    ClassificationLevel,
     DocumentIngestRequest,
     DocumentProcessingResult,
     DocumentRecord,
     EnvironmentalReviewRequest,
     EvidenceCitation,
+    ProcessingJobSummary,
+    RegulatorySourceApprovalRequest,
     SearchResponse,
     SetupConfiguration,
     SetupConfigurationResult,
@@ -32,7 +47,13 @@ from .models import (
 from .rag import rag_service
 from .rate_limit import enforce_ip_rate_limit
 from .security import evaluate_abac, get_current_context
-from .storage import ObjectNotFoundError, ObjectStorageBackend, get_object_storage, storage_key
+from .storage import (
+    ObjectNotFoundError,
+    ObjectStorageBackend,
+    StorageUnavailableError,
+    get_object_storage,
+    storage_key,
+)
 from .workflows import assignment_engine
 
 settings = get_settings()
@@ -94,7 +115,7 @@ async def _lifespan(app: FastAPI):
 app = FastAPI(
     title="GoAnalyze Government Document Intelligence Platform",
     version="2.0.0",
-    description="Government-grade AI document intelligence API with audit, ABAC, RAG citations, and environmental review.",
+    description="Document intelligence API with audit, ABAC, search, and decision-support workflows. Grounded generation and vector retrieval require configured providers.",
     lifespan=_lifespan,
 )
 
@@ -260,6 +281,20 @@ async def ready(session: AsyncSession = Depends(get_session)) -> Response:
     return Response(content='{"status":"ready"}', media_type="application/json", status_code=200)
 
 
+@app.exception_handler(StorageUnavailableError)
+async def storage_unavailable_handler(request: Request, exc: StorageUnavailableError) -> Response:
+    """Expose storage outages as a retryable service-unavailable response."""
+    logging.getLogger("gov_platform").error(
+        "Durable object storage unavailable on %s %s", request.method, request.url.path
+    )
+    return Response(
+        content='{"detail":"object_storage_unavailable"}',
+        media_type="application/json",
+        status_code=503,
+        headers={"Retry-After": "30"},
+    )
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> Response:
     """Never leak a bare framework error page or a stack trace to the
@@ -300,6 +335,9 @@ async def ingest_document(
     if not decision.allowed:
         raise HTTPException(status_code=403, detail=decision.reason)
     record = DocumentRecord(**payload.model_dump())
+    # The client-provided URI is never authoritative. Allocate a stable,
+    # server-controlled object key before persisting the document record.
+    record.object_uri = f"object://{storage_key(record.tenant_id, record.id)}"
     await DocumentRepository(session).create(record)
     await search_service.index_document(record)
     await audit_log.append(
@@ -320,33 +358,24 @@ async def ingest_document(
 
 @app.post("/v1/setup", response_model=SetupConfigurationResult)
 async def submit_setup_configuration(payload: SetupConfiguration) -> SetupConfigurationResult:
-    """Accept configuration collected by the enterprise configuration wizard
-    (PostgreSQL, MinIO, OpenSearch, Redis, Keycloak/Azure AD/Microsoft Entra ID,
-    OCR engine, AI provider, object storage, email notifications). Real
-    deployments persist this to a secrets manager; here it is validated and
-    echoed back as accepted components so operators know what is wired up."""
-    validated = [
-        "postgresql",
-        "minio",
-        "opensearch",
-        "redis",
-        payload.identity_provider.value,
-        "ocr_engine",
-        "ai_provider",
-        "object_storage",
+    """Validate the request shape only; this endpoint does not persist secrets,
+    test connectivity, or configure external services."""
+    # Do not report requested services as validated when no live checks ran.
+    validated: list[str] = []
+    warnings: list[str] = [
+        "configuration_received_only; no connectivity checks or persistence performed"
     ]
-    warnings: list[str] = []
     if payload.identity_provider == "keycloak" and not payload.keycloak_issuer:
         warnings.append("keycloak_issuer_missing")
     if payload.identity_provider == "azure_ad" and not (payload.azure_ad_tenant_id and payload.azure_ad_client_id):
         warnings.append("azure_ad_credentials_incomplete")
     if payload.identity_provider == "microsoft_entra_id" and not payload.microsoft_entra_id_tenant_id:
         warnings.append("microsoft_entra_id_tenant_missing")
-    if payload.email_notifications_enabled:
-        validated.append("email_notifications")
-        if not (payload.email_smtp_host and payload.email_from_address):
-            warnings.append("email_notification_settings_incomplete")
-    return SetupConfigurationResult(accepted=len(warnings) == 0, validated_components=validated, warnings=warnings)
+    if payload.email_notifications_enabled and not (
+        payload.email_smtp_host and payload.email_from_address
+    ):
+        warnings.append("email_notification_settings_incomplete")
+    return SetupConfigurationResult(accepted=True, validated_components=validated, warnings=warnings)
 
 
 @app.post("/v1/documents/{document_id}/process", response_model=DocumentProcessingResult)
@@ -355,6 +384,7 @@ async def process_document(
     request: Request,
     context: TenantContext = Depends(get_current_context),
     session: AsyncSession = Depends(get_session),
+    storage: ObjectStorageBackend = Depends(get_object_storage),
 ) -> DocumentProcessingResult:
     """Run the native ingestion pipeline: OCR, classification, metadata and
     entity extraction, compliance analysis, risk scoring, vector indexing,
@@ -366,56 +396,49 @@ async def process_document(
     decision = evaluate_abac(context, "document:process", record.tenant_id, record.classification, purpose)
     if not decision.allowed:
         raise HTTPException(status_code=403, detail=decision.reason)
+    try:
+        raw_bytes = await storage.get(storage_key(record.tenant_id, record.id))
+    except ObjectNotFoundError:
+        raw_bytes = None
     return await ingestion_pipeline.run(
         record=record,
         actor=context.attributes.get("sub", "api-user"),
         trace_id=request.headers.get("traceparent", "local-trace"),
         purpose=purpose,
         session=session,
+        raw_bytes=raw_bytes,
     )
 
 
 @app.post("/v1/rag/answer")
 async def rag_answer(
     question: str,
-    citations: list[EvidenceCitation],
     request: Request,
     context: TenantContext = Depends(get_current_context),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """Answer a question grounded in the supplied evidence citations.
+    """Retrieve authorized, current-version chunks and generate a cited answer.
 
-    Every cited document is re-fetched from the tenant-scoped document store
-    and its ownership verified before the citation is trusted: a caller
-    cannot get a grounded answer that leans on a document belonging to a
-    different tenant just by forging a ``document_id`` in the request body.
+    Client-supplied citations are deliberately not accepted as evidence. The
+    retrieval service resolves chunks from durable storage and validates the
+    document version and digest before any content reaches the model.
     """
-    repository = DocumentRepository(session)
-    document_ids = [citation.document_id for citation in citations]
-    documents = await repository.get_many(document_ids)
-
-    for citation in citations:
-        record = documents.get(citation.document_id)
-        if record is None:
-            raise HTTPException(status_code=403, detail="citation_document_not_found")
-        if record.tenant_id != context.tenant_id and "platform-admin" not in context.roles:
-            raise HTTPException(status_code=403, detail="citation_tenant_mismatch")
-        if record.classification == "protected_b" and "protected-b-reader" not in context.roles:
-            raise HTTPException(status_code=403, detail="protected_b_role_required")
-
-    finding = rag_service.answer(question, citations)
+    try:
+        finding = await rag_service.answer(question, context.tenant_id, context.roles, session)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     await audit_log.append(
         session,
         AuditEvent(
             tenant_id=context.tenant_id,
             actor=context.attributes.get("sub", "api-user"),
-            action="rag.answer_generated",
+            action="rag.answer_generated" if finding.grounded else "rag.answer_unavailable",
             resource_type="rag_query",
-            resource_id=",".join(str(cid) for cid in document_ids) or "none",
+            resource_id="retrieval",
             purpose=request.headers.get("x-purpose", "case-review"),
             trace_id=request.headers.get("traceparent", "local-trace"),
-            details={"grounded": finding.grounded, "citation_count": len(citations)},
+            details={"grounded": finding.grounded, "citation_count": len(finding.citations)},
         ),
     )
 
@@ -434,24 +457,98 @@ async def environmental_review(
 
     repository = DocumentRepository(session)
     documents = await repository.get_many(payload.documents)
+    missing_ids = set(payload.documents) - set(documents)
+    if missing_ids:
+        raise HTTPException(status_code=404, detail="review_document_not_found")
+    for document in documents.values():
+        # A review may only use documents belonging to the review tenant,
+        # even for platform administrators; mixed-tenant evidence is rejected.
+        if document.tenant_id != payload.tenant_id:
+            raise HTTPException(status_code=403, detail="review_document_tenant_mismatch")
+        document_decision = evaluate_abac(
+            context,
+            "document:read",
+            document.tenant_id,
+            document.classification,
+            request.headers.get("x-purpose", "case-review"),
+        )
+        if not document_decision.allowed:
+            raise HTTPException(status_code=403, detail=document_decision.reason)
 
+    case_record = (await session.execute(
+        select(CaseORM).where(
+            CaseORM.id == payload.case_id,
+            CaseORM.tenant_id == payload.tenant_id,
+        )
+    )).scalar_one_or_none()
+    if case_record is None:
+        raise HTTPException(status_code=404, detail="case_not_found")
     available_types = {
         str(documents[doc_id].metadata.get("document_type"))
         for doc_id in payload.documents
         if doc_id in documents and documents[doc_id].metadata.get("document_type")
     }
-    citations = [
-        EvidenceCitation(
-            document_id=doc_id,
-            version=documents[doc_id].version,
-            chunk_id=f"{doc_id}:metadata",
-            sha256=documents[doc_id].sha256,
-            excerpt=f"{documents[doc_id].filename} supplied for {payload.project_type}",
-        )
-        for doc_id in payload.documents
-        if doc_id in documents
-    ]
+    # The checklist is metadata-based only. Do not fabricate citations for it;
+    # the source-backed assessment below uses verified persisted chunks.
+    citations: list[EvidenceCitation] = []
     result = engine.review(payload, available_types, citations)
+    # A source-backed assessment is only surfaced as grounded when the model
+    # cites both authorized case evidence and an approved official source.
+    assessment_question = (
+        f"Prepare a preliminary evidence review for project type {payload.project_type} "
+        f"at {payload.location}. Applicant: {payload.applicant}. "
+        "Compare only the retrieved document evidence with the approved official "
+        "regulatory sources. Identify potentially relevant requirements, evidence gaps, "
+        "and ambiguities. Cite every material claim with the exact chunk marker. "
+        "Do not decide legal compliance, do not invent thresholds, and do not assign a risk score."
+    )
+    jurisdiction = str(payload.attributes.get("jurisdiction", "")).upper()
+    if jurisdiction in {"QC", "CA"}:
+        assessment = await rag_service.answer(
+            assessment_question, payload.tenant_id, context.roles, session,
+            jurisdiction=jurisdiction, document_ids=set(payload.documents)
+        )
+    else:
+        assessment = AIFinding(
+            finding_type="regulatory_evidence_review_unavailable",
+            statement="A jurisdiction must be specified before regulatory evidence can be assessed.",
+            confidence=0.0,
+            citations=[],
+            grounded=False,
+            explanation="Set attributes.jurisdiction to QC or CA and ensure the official source version is approved.",
+        )
+    has_document_evidence = any(citation.document_id is not None for citation in assessment.citations)
+    has_official_source = any(citation.regulatory_source_id is not None for citation in assessment.citations)
+    if assessment.grounded and has_document_evidence and has_official_source:
+        result.compliance_findings.append(
+            AIFinding(
+                finding_type="regulatory_evidence_review",
+                statement=assessment.statement,
+                confidence=0.0,
+                citations=assessment.citations,
+                grounded=True,
+                explanation=(
+                    "Citations resolve to current-version tenant evidence and an approved official source. "
+                    "Confidence is uncalibrated; this is preliminary decision support, not a legal conclusion."
+                ),
+            )
+        )
+    else:
+        result.compliance_findings.append(
+            AIFinding(
+                finding_type="regulatory_evidence_review_unavailable",
+                statement="A source-verified regulatory assessment could not be produced.",
+                confidence=0.0,
+                citations=[],
+                grounded=False,
+                explanation=assessment.explanation,
+            )
+        )
+    case_record.risk_score = result.risk_score
+    case_record.recommendation = result.recommendation
+    case_record.status = "awaiting_information" if result.missing_documents else "technical_review"
+    case_record.updated_at = datetime.now(UTC)
+    await session.commit()
     await audit_log.append(
         session,
         AuditEvent(
@@ -468,6 +565,321 @@ async def environmental_review(
     return result.model_dump(mode="json")
 
 
+@app.get("/v1/regulatory-sources")
+async def list_regulatory_sources(
+    context: TenantContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    if "platform-admin" not in context.roles:
+        raise HTTPException(status_code=403, detail="platform_admin_required")
+    sources = (await session.execute(
+        select(RegulatorySourceORM).order_by(RegulatorySourceORM.jurisdiction, RegulatorySourceORM.title)
+    )).scalars().all()
+    return {
+        "items": [
+            {"id": str(source.id), "jurisdiction": source.jurisdiction, "title": source.title,
+             "official_url": source.official_url, "authority_domain": source.authority_domain,
+             "source_version": source.source_version, "status": source.status,
+             "content_sha256": source.content_sha256, "last_verified_at": source.last_verified_at.isoformat()
+             if source.last_verified_at else None, "reviewer": source.reviewer}
+            for source in sources
+        ],
+        "total": len(sources),
+    }
+
+
+@app.post("/v1/regulatory-sources/{source_id}/approve")
+async def approve_regulatory_source(
+    source_id: UUID,
+    payload: RegulatorySourceApprovalRequest,
+    request: Request,
+    context: TenantContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    if "platform-admin" not in context.roles:
+        raise HTTPException(status_code=403, detail="platform_admin_required")
+    source = await session.get(RegulatorySourceORM, source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="regulatory_source_not_found")
+    if source.status != "fetched_pending_review" or not source.content_sha256:
+        raise HTTPException(status_code=409, detail="source_must_be_fetched_and_pending_review")
+    chunk_count = (await session.execute(
+        select(func.count()).select_from(RegulatoryChunkORM).where(
+            RegulatoryChunkORM.source_id == source.id,
+            RegulatoryChunkORM.source_sha256 == source.content_sha256,
+        )
+    )).scalar_one()
+    if chunk_count == 0:
+        raise HTTPException(status_code=409, detail="source_has_no_current_embedded_chunks")
+    source.status = "approved"
+    source.source_version = payload.source_version
+    source.reviewer = str(context.attributes.get("sub", "platform-admin"))
+    await session.commit()
+    await audit_log.append(
+        session,
+        AuditEvent(
+            tenant_id=context.tenant_id,
+            actor=source.reviewer,
+            action="regulatory_source.approved",
+            resource_type="regulatory_source",
+            resource_id=str(source.id),
+            purpose="operations",
+            trace_id=request.headers.get("traceparent", "local-trace"),
+            details={"official_url": source.official_url, "source_version": source.source_version,
+                     "content_sha256": source.content_sha256, "chunk_count": chunk_count,
+                     "reviewer_note": payload.reviewer_note},
+        ),
+    )
+    return {"id": str(source.id), "status": source.status, "reviewer": source.reviewer,
+            "content_sha256": source.content_sha256, "chunk_count": chunk_count}
+
+
+@app.post("/v1/cases")
+async def create_case(
+    payload: CaseCreateRequest,
+    request: Request,
+    context: TenantContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    if "case-manager" not in context.roles and "tenant-admin" not in context.roles:
+        raise HTTPException(status_code=403, detail="case_manager_role_required")
+    case = CaseORM(
+        tenant_id=context.tenant_id,
+        title=payload.title,
+        project_type=payload.project_type,
+        location=payload.location,
+        applicant=payload.applicant,
+        status="intake",
+        attributes=payload.attributes,
+        created_by=str(context.attributes.get("sub", "api-user")),
+    )
+    session.add(case)
+    await session.commit()
+    await session.refresh(case)
+    await audit_log.append(
+        session,
+        AuditEvent(
+            tenant_id=context.tenant_id,
+            actor=str(context.attributes.get("sub", "api-user")),
+            action="case.created",
+            resource_type="case",
+            resource_id=str(case.id),
+            purpose=request.headers.get("x-purpose", "case-review"),
+            trace_id=request.headers.get("traceparent", "local-trace"),
+            details={"project_type": case.project_type, "status": case.status},
+        ),
+    )
+    return _case_summary(case, 0)
+
+
+def _case_summary(case: CaseORM, document_count: int) -> dict:
+    return {
+        "id": str(case.id),
+        "tenant_id": case.tenant_id,
+        "title": case.title,
+        "project_type": case.project_type,
+        "location": case.location,
+        "applicant": case.applicant,
+        "status": case.status,
+        "risk_score": case.risk_score,
+        "recommendation": case.recommendation,
+        "attributes": case.attributes,
+        "created_by": case.created_by,
+        "created_at": case.created_at.isoformat(),
+        "updated_at": case.updated_at.isoformat(),
+        "document_count": document_count,
+    }
+
+
+@app.get("/v1/cases")
+async def list_cases(
+    page: int = 1,
+    page_size: int = 20,
+    status: str | None = None,
+    context: TenantContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    if page < 1 or not 1 <= page_size <= 100:
+        raise HTTPException(status_code=422, detail="invalid_pagination")
+    conditions = [CaseORM.tenant_id == context.tenant_id]
+    if status:
+        conditions.append(CaseORM.status == status)
+    total = (await session.execute(
+        select(func.count()).select_from(CaseORM).where(*conditions)
+    )).scalar_one()
+    cases = (await session.execute(
+        select(CaseORM).where(*conditions)
+        .order_by(CaseORM.created_at.desc(), CaseORM.id.desc())
+        .offset((page - 1) * page_size).limit(page_size)
+    )).scalars().all()
+    counts: dict[UUID, int] = {}
+    if cases:
+        rows = (await session.execute(
+            select(DocumentORM.case_id, func.count())
+            .where(
+                DocumentORM.tenant_id == context.tenant_id,
+                DocumentORM.case_id.in_([case.id for case in cases]),
+            )
+            .group_by(DocumentORM.case_id)
+        )).all()
+        counts = {case_id: count for case_id, count in rows if case_id is not None}
+    return {
+        "items": [_case_summary(case, counts.get(case.id, 0)) for case in cases],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total + page_size - 1) // page_size,
+    }
+
+
+@app.get("/v1/cases/{case_id}")
+async def get_case(
+    case_id: UUID,
+    context: TenantContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    case = (await session.execute(
+        select(CaseORM).where(CaseORM.id == case_id, CaseORM.tenant_id == context.tenant_id)
+    )).scalar_one_or_none()
+    if case is None:
+        raise HTTPException(status_code=404, detail="case_not_found")
+    assignments = (await session.execute(
+        select(CaseAssignmentORM)
+        .where(
+            CaseAssignmentORM.case_id == case_id,
+            CaseAssignmentORM.tenant_id == context.tenant_id,
+        )
+        .order_by(CaseAssignmentORM.created_at.desc())
+    )).scalars().all()
+    documents, _ = await DocumentRepository(session).list_for_tenant(
+        context.tenant_id, page=1, page_size=100, case_id=case_id
+    )
+    result = _case_summary(case, len(documents))
+    result["documents"] = [
+        {"id": str(doc.id), "filename": doc.filename, "content_type": doc.content_type,
+         "classification": doc.classification.value, "created_at": doc.created_at.isoformat()}
+        for doc in documents
+    ]
+    result["assignments"] = [
+        {"id": str(item.id), "assignee": item.assignee, "queue": item.queue, "status": item.status,
+         "due_at": item.due_at.isoformat(), "escalation_at": item.escalation_at.isoformat()}
+        for item in assignments
+    ]
+    return result
+
+
+@app.get("/v1/analytics/summary")
+async def analytics_summary(
+    context: TenantContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    case_rows = (await session.execute(
+        select(CaseORM.status, func.count()).where(CaseORM.tenant_id == context.tenant_id)
+        .group_by(CaseORM.status)
+    )).all()
+    job_rows = (await session.execute(
+        select(ProcessingJobORM.status, func.count())
+        .where(ProcessingJobORM.tenant_id == context.tenant_id)
+        .group_by(ProcessingJobORM.status)
+    )).all()
+    document_count = (await session.execute(
+        select(func.count()).select_from(DocumentORM).where(DocumentORM.tenant_id == context.tenant_id)
+    )).scalar_one()
+    case_count = (await session.execute(
+        select(func.count()).select_from(CaseORM).where(CaseORM.tenant_id == context.tenant_id)
+    )).scalar_one()
+    risk_count = (await session.execute(
+        select(func.count(CaseORM.risk_score)).where(CaseORM.tenant_id == context.tenant_id)
+    )).scalar_one()
+    return {
+        "tenant_id": context.tenant_id,
+        "cases_total": case_count,
+        "cases_by_status": {key: value for key, value in case_rows},
+        "documents_total": document_count,
+        "processing_jobs_by_status": {key: value for key, value in job_rows},
+        "cases_with_validated_risk_score": risk_count,
+        "risk_aggregate_available": risk_count > 0,
+    }
+
+
+@app.post("/v1/documents/{document_id}/process-async", status_code=202)
+async def enqueue_document_processing(
+    document_id: UUID,
+    request: Request,
+    context: TenantContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    record = await DocumentRepository(session).get(document_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="document_not_found")
+    purpose = request.headers.get("x-purpose", "case-review")
+    decision = evaluate_abac(context, "document:process", record.tenant_id, record.classification, purpose)
+    if not decision.allowed:
+        raise HTTPException(status_code=403, detail=decision.reason)
+    job = ProcessingJobORM(
+        tenant_id=record.tenant_id,
+        document_id=record.id,
+        actor=str(context.attributes.get("sub", "api-user")),
+        trace_id=request.headers.get("traceparent", "local-trace"),
+        purpose=purpose,
+        status="queued",
+    )
+    session.add(job)
+    await session.commit()
+    await session.refresh(job)
+    return {"id": str(job.id), "document_id": str(job.document_id), "status": job.status,
+            "created_at": job.created_at.isoformat(), "poll_url": f"/v1/jobs/{job.id}"}
+
+
+@app.post("/v1/jobs/{job_id}/retry", status_code=202)
+async def retry_processing_job(
+    job_id: UUID,
+    context: TenantContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    if "case-manager" not in context.roles and "tenant-admin" not in context.roles:
+        raise HTTPException(status_code=403, detail="case_manager_role_required")
+    job = (await session.execute(
+        select(ProcessingJobORM).where(
+            ProcessingJobORM.id == job_id,
+            ProcessingJobORM.tenant_id == context.tenant_id,
+        )
+    )).scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    if job.status != "failed":
+        raise HTTPException(status_code=409, detail="only_failed_jobs_can_be_retried")
+    if job.attempts >= 3:
+        raise HTTPException(status_code=409, detail="job_retry_limit_reached")
+    job.status = "queued"
+    job.error_code = None
+    job.started_at = None
+    job.finished_at = None
+    await session.commit()
+    return {"id": str(job.id), "status": job.status, "attempts": job.attempts}
+
+
+@app.get("/v1/jobs/{job_id}", response_model=ProcessingJobSummary)
+async def get_processing_job(
+    job_id: UUID,
+    context: TenantContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    job = (await session.execute(
+        select(ProcessingJobORM).where(
+            ProcessingJobORM.id == job_id, ProcessingJobORM.tenant_id == context.tenant_id
+        )
+    )).scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    return {
+        "id": job.id, "tenant_id": job.tenant_id, "document_id": job.document_id,
+        "status": job.status, "attempts": job.attempts, "error_code": job.error_code,
+        "result": job.result, "created_at": job.created_at, "started_at": job.started_at,
+        "finished_at": job.finished_at,
+    }
+
+
 @app.post("/v1/cases/{case_id}/assign")
 async def assign_case(
     case_id: UUID,
@@ -477,6 +889,11 @@ async def assign_case(
 ) -> dict:
     if "case-manager" not in context.roles and "tenant-admin" not in context.roles:
         raise HTTPException(status_code=403, detail="case_manager_role_required")
+    case_record = (await session.execute(
+        select(CaseORM).where(CaseORM.id == case_id, CaseORM.tenant_id == context.tenant_id)
+    )).scalar_one_or_none()
+    if case_record is None:
+        raise HTTPException(status_code=404, detail="case_not_found")
     assignment = assignment_engine.assign(case_id, skill, {"analyst-1": 3, "analyst-2": 1})
     await CaseRepository(session).create_assignment(
         case_id=assignment.case_id,
@@ -543,6 +960,66 @@ async def search_documents(
     )
 
 
+@app.get("/v1/documents")
+async def list_documents(
+    request: Request,
+    page: int = 1,
+    page_size: int = 20,
+    classification: str | None = None,
+    content_type: str | None = None,
+    case_id: UUID | None = None,
+    context: TenantContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """List documents visible to the authenticated tenant, newest first."""
+    if page < 1:
+        raise HTTPException(status_code=422, detail="page_must_be_positive")
+    if not (1 <= page_size <= 100):
+        raise HTTPException(status_code=422, detail="page_size_must_be_between_1_and_100")
+    purpose = request.headers.get("x-purpose", "case-review")
+    purpose_decision = evaluate_abac(
+        context, "document:read", context.tenant_id, 
+        ClassificationLevel.internal,
+        purpose,
+    )
+    if not purpose_decision.allowed:
+        raise HTTPException(status_code=403, detail=purpose_decision.reason)
+    records, total = await DocumentRepository(session).list_for_tenant(
+        tenant_id=context.tenant_id,
+        page=page,
+        page_size=page_size,
+        classification=classification,
+        content_type=content_type,
+        case_id=case_id,
+        exclude_protected_b="protected-b-reader" not in context.roles,
+    )
+    return {
+        "items": [record.model_dump(mode="json") for record in records],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total + page_size - 1) // page_size if total else 0,
+    }
+
+
+@app.get("/v1/documents/{document_id}", response_model=DocumentRecord)
+async def get_document(
+    document_id: UUID,
+    request: Request,
+    context: TenantContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> DocumentRecord:
+    """Fetch one document after tenant and classification authorization."""
+    record = await DocumentRepository(session).get(document_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="document_not_found")
+    purpose = request.headers.get("x-purpose", "case-review")
+    decision = evaluate_abac(context, "document:read", record.tenant_id, record.classification, purpose)
+    if not decision.allowed:
+        raise HTTPException(status_code=403, detail=decision.reason)
+    return record
+
+
 @app.put("/v1/documents/{document_id}/content")
 async def upload_document_content(
     document_id: UUID,
@@ -564,13 +1041,21 @@ async def upload_document_content(
     if not decision.allowed:
         raise HTTPException(status_code=403, detail=decision.reason)
 
-    body = await request.body()
-    if not body:
+    # Consume the request incrementally and enforce the cap while reading;
+    # Request.body() would buffer an arbitrarily large attacker-controlled body
+    # before this endpoint could reject it. The storage interface still accepts
+    # bytes, so the accepted (<=100 MiB) payload is buffered once for persistence.
+    body_buffer = bytearray()
+    async for chunk in request.stream():
+        if len(body_buffer) + len(chunk) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="upload_too_large")
+        body_buffer.extend(chunk)
+    if not body_buffer:
         raise HTTPException(status_code=422, detail="empty_upload_body")
-    if len(body) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="upload_too_large")
 
-    digest = hashlib.sha256(body).hexdigest()
+    digest = hashlib.sha256(body_buffer).hexdigest()
+    body = bytes(body_buffer)
+    del body_buffer
     if digest != record.sha256:
         raise HTTPException(status_code=422, detail="sha256_mismatch")
 

@@ -54,6 +54,40 @@ class DocumentRepository:
         result = await self._session.execute(select(DocumentORM).where(DocumentORM.id.in_(document_ids)))
         return {orm.id: self._to_domain(orm) for orm in result.scalars().all()}
 
+    async def list_for_tenant(
+        self,
+        tenant_id: str,
+        page: int,
+        page_size: int,
+        classification: str | None = None,
+        content_type: str | None = None,
+        case_id: UUID | None = None,
+        exclude_protected_b: bool = False,
+    ) -> tuple[list[DocumentRecord], int]:
+        """List documents with server-enforced tenant and access filters."""
+        conditions = [DocumentORM.tenant_id == tenant_id]
+        if classification:
+            conditions.append(DocumentORM.classification == classification)
+        if content_type:
+            conditions.append(DocumentORM.content_type == content_type)
+        if case_id:
+            conditions.append(DocumentORM.case_id == case_id)
+        if exclude_protected_b:
+            conditions.append(DocumentORM.classification != ClassificationLevel.protected_b.value)
+
+        count_result = await self._session.execute(
+            select(func.count()).select_from(DocumentORM).where(*conditions)
+        )
+        total = count_result.scalar_one()
+        result = await self._session.execute(
+            select(DocumentORM)
+            .where(*conditions)
+            .order_by(DocumentORM.created_at.desc(), DocumentORM.id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        return [self._to_domain(orm) for orm in result.scalars().all()], total
+
     async def search(
         self,
         tenant_id: str,
