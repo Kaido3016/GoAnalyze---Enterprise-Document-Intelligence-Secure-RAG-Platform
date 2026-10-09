@@ -9,7 +9,7 @@ import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 
 from .db.models import ProcessingJobORM
 from .db.repositories import DocumentRepository
@@ -28,6 +28,15 @@ async def claim_job():
     async with sessionmaker() as session:
         async with session.begin():
             now = datetime.now(UTC)
+            await session.execute(
+                update(ProcessingJobORM)
+                .where(
+                    ProcessingJobORM.status == "processing",
+                    ProcessingJobORM.started_at < now - STALE_AFTER,
+                    ProcessingJobORM.attempts >= MAX_ATTEMPTS,
+                )
+                .values(status="failed", error_code="worker_lease_expired", finished_at=now)
+            )
             result = await session.execute(
                 select(ProcessingJobORM)
                 .where(
