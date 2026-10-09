@@ -62,10 +62,13 @@ class EnvironmentalAuthorizationEngine:
             AIFinding(
                 finding_type="regulation_mapping",
                 statement=regulation,
-                confidence=0.82 if citations else 0.45,
-                citations=citations[:2],
-                grounded=bool(citations),
-                explanation="Mapped from project type, supplied document set, and evidence availability.",
+                confidence=0.0,
+                citations=[],
+                grounded=False,
+                explanation=(
+                    "Rule-based mapping from project type only. No authoritative regulatory "
+                    "source was retrieved and verified for this mapping."
+                ),
             )
             for regulation in REGULATIONS_BY_PROJECT.get(request.project_type, ["General authorization review"])
         ]
@@ -93,10 +96,13 @@ class EnvironmentalAuthorizationEngine:
                 AIFinding(
                     finding_type="missing_document",
                     statement=f"Required document is missing: {name}",
-                    confidence=0.96,
+                    confidence=0.0,
                     citations=[],
-                    grounded=True,
-                    explanation=f"Case {case_id} cannot complete admissibility until this item is supplied.",
+                    grounded=False,
+                    explanation=(
+                        f"Rule-based document-type checklist for case {case_id}; this is not "
+                        "evidence that the underlying document content was reviewed."
+                    ),
                 )
                 for name in missing
             ]
@@ -104,10 +110,13 @@ class EnvironmentalAuthorizationEngine:
             AIFinding(
                 finding_type="admissibility",
                 statement="Required document set is complete for admissibility screening.",
-                confidence=0.88,
-                citations=citations[:3],
-                grounded=bool(citations),
-                explanation="All required document type markers were present in the case file.",
+                confidence=0.0,
+                citations=[],
+                grounded=False,
+                explanation=(
+                    "Declared document-type markers satisfy the configured checklist, but "
+                    "document contents and authoritative regulatory sources were not verified."
+                ),
             )
         ]
 
