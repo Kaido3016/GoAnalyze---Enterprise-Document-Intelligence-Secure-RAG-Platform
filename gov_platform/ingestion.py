@@ -23,7 +23,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .audit import audit_log
 from .environmental_engine import engine as compliance_engine
 from .extraction import ExtractionUnavailable, extract_document_text
-from .rag import rag_service
 from .models import (
     AuditEvent,
     DocumentProcessingResult,
@@ -33,6 +32,7 @@ from .models import (
     PipelineStage,
     StageResult,
 )
+from .rag import rag_service
 from .workflows import assignment_engine
 
 _ENTITY_PATTERN = re.compile(r"\b[A-Z][a-zA-Z]{2,}(?:\s[A-Z][a-zA-Z]{2,})*\b")
@@ -123,7 +123,7 @@ class IngestionPipeline:
         index_started = time.perf_counter()
         try:
             index_output = await rag_service.index_document(record, text, session)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - keep pipeline alive and mark optional indexing degraded
             index_output = {
                 "indexed": False,
                 "reason": f"indexing_failed:{type(exc).__name__}",
