@@ -29,6 +29,7 @@ These items cannot honestly be marked fixed by source changes alone:
 6. **Identity and infrastructure:** provision Keycloak realm/client or the chosen IdP, production secrets, TLS/network policy, and test the deployment topology.
 7. **Reliability:** reconcile object storage and database writes, add cleanup/compensation for partial failures, and use an asynchronous queue for long-running document processing.
 8. **Security and operations:** independent penetration testing, backup/restore and disaster-recovery exercises, retention/deletion verification, externally anchored audit evidence, load tests, and target-environment acceptance remain required.
+9. **Frontend dependency security:** current CI npm audit still fails on 10 existing advisories (9 high, 1 critical), including Next.js, sharp, and source-map-js. Upgrade to patched versions and regenerate/commit package-lock.json as a reviewed dependency change before merging; do not bypass the audit gate.
 
 ## Verification
 
