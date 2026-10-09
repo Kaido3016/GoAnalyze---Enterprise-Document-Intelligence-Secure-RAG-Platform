@@ -131,6 +131,12 @@ async def sync_sources() -> dict[str, int]:
                 await session.execute(delete(RegulatoryChunkORM).where(RegulatoryChunkORM.source_id == source.id))
                 source.content_text = text
                 source.content_sha256 = digest
+                version_match = re.search(
+                    r"(?:updated to|current to|à jour au)\\s+([^\\n.]{3,100})",
+                    text[:20000],
+                    re.IGNORECASE,
+                )
+                source.source_version = version_match.group(1).strip() if version_match else None
                 source.status = "fetched_pending_review"
                 source.last_verified_at = datetime.now(UTC)
                 source.reviewer = None
