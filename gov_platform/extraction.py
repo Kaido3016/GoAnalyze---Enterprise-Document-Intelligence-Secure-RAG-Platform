@@ -11,6 +11,8 @@ import io
 import logging
 import zipfile
 
+from .config import get_settings
+
 logger = logging.getLogger(__name__)
 MAX_PDF_PAGES = 250
 MAX_EXTRACTED_CHARS = 2_000_000
@@ -80,7 +82,7 @@ def _ocr_pdf_page(data: bytes, page_number: int) -> str:
             raise ExtractionUnavailable("pdf_page_render_pixel_limit_exceeded")
         bitmap = page.render(scale=1.8, rotation=0)
         image = bitmap.to_pil()
-        return pytesseract.image_to_string(image, lang="eng", timeout=45)
+        return pytesseract.image_to_string(image, lang=get_settings().ocr_languages, timeout=45)
     except ExtractionUnavailable:
         raise
     except Exception as exc:
