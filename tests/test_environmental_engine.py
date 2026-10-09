@@ -20,4 +20,7 @@ def test_missing_documents_drive_admissibility_and_risk():
     assert "site_plan" in result.missing_documents
     assert result.risk_score > 25
     assert result.recommendation == "request_additional_information"
+    assert all(not finding.grounded for finding in result.regulation_mappings)
+    assert all(finding.confidence == 0.0 for finding in result.regulation_mappings)
+    assert all(not finding.grounded for finding in result.compliance_findings)
 
