@@ -76,8 +76,16 @@ class MinioObjectStorage:
         self._bucket = bucket
 
     def _ensure_bucket_sync(self) -> None:
+        from minio.error import S3Error
+
         if not self._client.bucket_exists(self._bucket):
-            self._client.make_bucket(self._bucket)
+            try:
+                self._client.make_bucket(self._bucket)
+            except S3Error as exc:
+                # Another API/worker replica may have created the bucket
+                # between bucket_exists and make_bucket.
+                if exc.code not in {"BucketAlreadyOwnedByYou", "BucketAlreadyExists"}:
+                    raise
 
     def _put_sync(self, key: str, data: bytes, content_type: str) -> None:
         self._ensure_bucket_sync()
