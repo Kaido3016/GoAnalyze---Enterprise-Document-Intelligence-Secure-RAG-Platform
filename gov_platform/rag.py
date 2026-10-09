@@ -125,7 +125,8 @@ class GroundedRagService:
             for start in range(0, len(parts), 32):
                 vectors.extend(await self.embed([part for part, _ in parts[start : start + 32]]))
         except ProviderUnavailable as exc:
-            return {"indexed": False, "reason": str(exc), "__stage_status": "degraded"}
+            status = "skipped" if "not_configured" in str(exc) else "degraded"
+            return {"indexed": False, "reason": str(exc), "__stage_status": status}
         await session.execute(
             delete(DocumentChunkORM).where(
                 DocumentChunkORM.tenant_id == record.tenant_id,
@@ -186,7 +187,7 @@ class GroundedRagService:
             query = query.where(DocumentChunkORM.classification != "protected_b")
         rows = (await session.execute(query)).scalars().all()
         ranked = sorted(
-            (( _cosine_similarity(query_vector, row.embedding), row) for row in rows),
+            ((_cosine_similarity(query_vector, row.embedding), row) for row in rows),
             key=lambda pair: pair[0],
             reverse=True,
         )
