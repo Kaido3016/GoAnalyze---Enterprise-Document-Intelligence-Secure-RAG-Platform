@@ -1,17 +1,20 @@
 import hashlib
 import logging
+from datetime import UTC, datetime
 from contextlib import asynccontextmanager
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, generate_latest
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response, StreamingResponse
 
 from . import search as search_service
 from .audit import audit_log
 from .config import get_settings
+from .db.models import CaseORM, CaseAssignmentORM, DocumentORM, ProcessingJobORM
 from .db.repositories import CaseRepository, DocumentRepository
 from .db.session import get_session
 from .environmental_engine import engine
@@ -19,6 +22,7 @@ from .ingestion import ingestion_pipeline
 from .models import (
     AuditEvent,
     AuditEventListResponse,
+    CaseCreateRequest,
     ClassificationLevel,
     DocumentIngestRequest,
     DocumentProcessingResult,
@@ -28,6 +32,7 @@ from .models import (
     SearchResponse,
     SetupConfiguration,
     SetupConfigurationResult,
+    ProcessingJobSummary,
     TenantContext,
 )
 from .rag import rag_service
@@ -485,6 +490,224 @@ async def environmental_review(
         ),
     )
     return result.model_dump(mode="json")
+
+
+@app.post("/v1/cases")
+async def create_case(
+    payload: CaseCreateRequest,
+    request: Request,
+    context: TenantContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    if "case-manager" not in context.roles and "tenant-admin" not in context.roles:
+        raise HTTPException(status_code=403, detail="case_manager_role_required")
+    case = CaseORM(
+        tenant_id=context.tenant_id,
+        title=payload.title,
+        project_type=payload.project_type,
+        location=payload.location,
+        applicant=payload.applicant,
+        status="intake",
+        attributes=payload.attributes,
+        created_by=str(context.attributes.get("sub", "api-user")),
+    )
+    session.add(case)
+    await session.commit()
+    await session.refresh(case)
+    await audit_log.append(
+        session,
+        AuditEvent(
+            tenant_id=context.tenant_id,
+            actor=str(context.attributes.get("sub", "api-user")),
+            action="case.created",
+            resource_type="case",
+            resource_id=str(case.id),
+            purpose=request.headers.get("x-purpose", "case-review"),
+            trace_id=request.headers.get("traceparent", "local-trace"),
+            details={"project_type": case.project_type, "status": case.status},
+        ),
+    )
+    return _case_summary(case, 0)
+
+
+def _case_summary(case: CaseORM, document_count: int) -> dict:
+    return {
+        "id": str(case.id),
+        "tenant_id": case.tenant_id,
+        "title": case.title,
+        "project_type": case.project_type,
+        "location": case.location,
+        "applicant": case.applicant,
+        "status": case.status,
+        "risk_score": case.risk_score,
+        "recommendation": case.recommendation,
+        "attributes": case.attributes,
+        "created_by": case.created_by,
+        "created_at": case.created_at.isoformat(),
+        "updated_at": case.updated_at.isoformat(),
+        "document_count": document_count,
+    }
+
+
+@app.get("/v1/cases")
+async def list_cases(
+    page: int = 1,
+    page_size: int = 20,
+    status: str | None = None,
+    context: TenantContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    if page < 1 or not 1 <= page_size <= 100:
+        raise HTTPException(status_code=422, detail="invalid_pagination")
+    conditions = [CaseORM.tenant_id == context.tenant_id]
+    if status:
+        conditions.append(CaseORM.status == status)
+    total = (await session.execute(
+        select(func.count()).select_from(CaseORM).where(*conditions)
+    )).scalar_one()
+    cases = (await session.execute(
+        select(CaseORM).where(*conditions)
+        .order_by(CaseORM.created_at.desc(), CaseORM.id.desc())
+        .offset((page - 1) * page_size).limit(page_size)
+    )).scalars().all()
+    counts: dict[UUID, int] = {}
+    if cases:
+        rows = (await session.execute(
+            select(DocumentORM.case_id, func.count())
+            .where(
+                DocumentORM.tenant_id == context.tenant_id,
+                DocumentORM.case_id.in_([case.id for case in cases]),
+            )
+            .group_by(DocumentORM.case_id)
+        )).all()
+        counts = {case_id: count for case_id, count in rows if case_id is not None}
+    return {
+        "items": [_case_summary(case, counts.get(case.id, 0)) for case in cases],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total + page_size - 1) // page_size,
+    }
+
+
+@app.get("/v1/cases/{case_id}")
+async def get_case(
+    case_id: UUID,
+    context: TenantContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    case = (await session.execute(
+        select(CaseORM).where(CaseORM.id == case_id, CaseORM.tenant_id == context.tenant_id)
+    )).scalar_one_or_none()
+    if case is None:
+        raise HTTPException(status_code=404, detail="case_not_found")
+    assignments = (await session.execute(
+        select(CaseAssignmentORM)
+        .where(
+            CaseAssignmentORM.case_id == case_id,
+            CaseAssignmentORM.tenant_id == context.tenant_id,
+        )
+        .order_by(CaseAssignmentORM.created_at.desc())
+    )).scalars().all()
+    documents, _ = await DocumentRepository(session).list_for_tenant(
+        context.tenant_id, page=1, page_size=100, case_id=case_id
+    )
+    result = _case_summary(case, len(documents))
+    result["documents"] = [
+        {"id": str(doc.id), "filename": doc.filename, "content_type": doc.content_type,
+         "classification": doc.classification.value, "created_at": doc.created_at.isoformat()}
+        for doc in documents
+    ]
+    result["assignments"] = [
+        {"id": str(item.id), "assignee": item.assignee, "queue": item.queue, "status": item.status,
+         "due_at": item.due_at.isoformat(), "escalation_at": item.escalation_at.isoformat()}
+        for item in assignments
+    ]
+    return result
+
+
+@app.get("/v1/analytics/summary")
+async def analytics_summary(
+    context: TenantContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    case_rows = (await session.execute(
+        select(CaseORM.status, func.count()).where(CaseORM.tenant_id == context.tenant_id)
+        .group_by(CaseORM.status)
+    )).all()
+    job_rows = (await session.execute(
+        select(ProcessingJobORM.status, func.count())
+        .where(ProcessingJobORM.tenant_id == context.tenant_id)
+        .group_by(ProcessingJobORM.status)
+    )).all()
+    document_count = (await session.execute(
+        select(func.count()).select_from(DocumentORM).where(DocumentORM.tenant_id == context.tenant_id)
+    )).scalar_one()
+    case_count = (await session.execute(
+        select(func.count()).select_from(CaseORM).where(CaseORM.tenant_id == context.tenant_id)
+    )).scalar_one()
+    risk_count = (await session.execute(
+        select(func.count(CaseORM.risk_score)).where(CaseORM.tenant_id == context.tenant_id)
+    )).scalar_one()
+    return {
+        "tenant_id": context.tenant_id,
+        "cases_total": case_count,
+        "cases_by_status": {key: value for key, value in case_rows},
+        "documents_total": document_count,
+        "processing_jobs_by_status": {key: value for key, value in job_rows},
+        "cases_with_validated_risk_score": risk_count,
+        "risk_aggregate_available": risk_count > 0,
+    }
+
+
+@app.post("/v1/documents/{document_id}/process-async", status_code=202)
+async def enqueue_document_processing(
+    document_id: UUID,
+    request: Request,
+    context: TenantContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    record = await DocumentRepository(session).get(document_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="document_not_found")
+    purpose = request.headers.get("x-purpose", "case-review")
+    decision = evaluate_abac(context, "document:process", record.tenant_id, record.classification, purpose)
+    if not decision.allowed:
+        raise HTTPException(status_code=403, detail=decision.reason)
+    job = ProcessingJobORM(
+        tenant_id=record.tenant_id,
+        document_id=record.id,
+        actor=str(context.attributes.get("sub", "api-user")),
+        trace_id=request.headers.get("traceparent", "local-trace"),
+        purpose=purpose,
+        status="queued",
+    )
+    session.add(job)
+    await session.commit()
+    await session.refresh(job)
+    return {"id": str(job.id), "document_id": str(job.document_id), "status": job.status,
+            "created_at": job.created_at.isoformat(), "poll_url": f"/v1/jobs/{job.id}"}
+
+
+@app.get("/v1/jobs/{job_id}", response_model=ProcessingJobSummary)
+async def get_processing_job(
+    job_id: UUID,
+    context: TenantContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    job = (await session.execute(
+        select(ProcessingJobORM).where(
+            ProcessingJobORM.id == job_id, ProcessingJobORM.tenant_id == context.tenant_id
+        )
+    )).scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    return {
+        "id": job.id, "tenant_id": job.tenant_id, "document_id": job.document_id,
+        "status": job.status, "attempts": job.attempts, "error_code": job.error_code,
+        "result": job.result, "created_at": job.created_at, "started_at": job.started_at,
+        "finished_at": job.finished_at,
+    }
 
 
 @app.post("/v1/cases/{case_id}/assign")
