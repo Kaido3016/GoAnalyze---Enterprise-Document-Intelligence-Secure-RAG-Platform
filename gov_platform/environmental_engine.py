@@ -73,7 +73,9 @@ class EnvironmentalAuthorizationEngine:
             for regulation in REGULATIONS_BY_PROJECT.get(request.project_type, ["General authorization review"])
         ]
         compliance_findings = self._compliance_findings(request.case_id, missing, citations)
-        risk_score = self._risk_score(missing, compliance_findings)
+        # Risk scores remain unavailable until a representative, reviewed
+        # benchmark supports a calibrated model. Checklist counts are not risk.
+        risk_score = None
         recommendation = self._recommendation(missing, risk_score)
         justification = self._justification(missing, risk_score, regulation_mappings)
         return EnvironmentalReviewResult(
@@ -126,21 +128,20 @@ class EnvironmentalAuthorizationEngine:
         confidence_penalty = sum(1.0 - finding.confidence for finding in findings) * 5.0
         return round(min(100.0, base + missing_penalty + confidence_penalty), 2)
 
-    def _recommendation(self, missing: list[str], risk_score: float) -> str:
+    def _recommendation(self, missing: list[str], risk_score: float | None) -> str:
         if missing:
             return "request_additional_information"
-        if risk_score >= 70:
-            return "refer_to_senior_technical_review"
-        return "proceed_to_technical_review"
+        # Do not auto-advance a case when the evidence and risk model are unvalidated.
+        return "refer_to_senior_technical_review"
 
     def _justification(self, missing: list[str], risk_score: float, mappings: list[AIFinding]) -> str:
         mapped = "; ".join(mapping.statement for mapping in mappings)
         if missing:
             return (
                 f"Admissibility is incomplete because {len(missing)} required item(s) are absent. "
-                f"Mapped obligations: {mapped}. Risk score: {risk_score}."
+                f"Mapped obligations: {mapped}. Risk score is unavailable pending validated evidence and evaluation."
             )
-        return f"Admissibility can proceed. Mapped obligations: {mapped}. Risk score: {risk_score}."
+        return f"The checklist is complete, but regulatory applicability and risk remain unverified. Mapped obligations: {mapped}. Risk score is unavailable pending validated evidence and evaluation."
 
 
 engine = EnvironmentalAuthorizationEngine()
