@@ -74,8 +74,16 @@ async def test_pipeline_handles_empty_text_without_error(db_session):
     )
 
     assert result.completed is True
+    assert result.status == "completed_with_warnings"
     assert result.classification_label == "uncategorized"
     assert result.extracted_entities == []
+    assert result.risk_score is None
+    stages = {stage.stage: stage for stage in result.stages}
+    assert stages[PipelineStage.ocr].status == "skipped"
+    assert stages[PipelineStage.compliance_analysis].status == "skipped"
+    assert stages[PipelineStage.risk_scoring].status == "skipped"
+    assert stages[PipelineStage.vector_indexing].status == "skipped"
+    assert stages[PipelineStage.vector_indexing].output["indexed"] is False
 
 
 async def test_pipeline_appends_hash_chained_audit_event(db_session):
