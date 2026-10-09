@@ -110,6 +110,7 @@ class IngestionPipeline:
             record,
             label,
             metadata,
+            text,
         )
         result.stages.append(compliance_stage)
 
@@ -134,6 +135,11 @@ class IngestionPipeline:
         result.stages.append(audit_stage)
 
         result.completed = True
+        result.status = (
+            "completed_with_warnings"
+            if any(stage.status in {"skipped", "degraded", "failed"} for stage in result.stages)
+            else "completed"
+        )
         return result
 
     # -- stage implementations -------------------------------------------------
@@ -145,9 +151,21 @@ class IngestionPipeline:
         text = raw_text if raw_text is not None else self.ocr_engine.extract_text(
             record.object_uri, record.content_type
         )
+        if not text.strip():
+            return {
+                "character_count": 0,
+                "reason": "no_text_extracted_or_ocr_not_configured",
+                "__stage_status": "skipped",
+            }, text
         return {"character_count": len(text)}, text
 
     def _stage_classify(self, text: str) -> tuple[dict[str, Any], str]:
+        if not text.strip():
+            return {
+                "label": "uncategorized",
+                "reason": "source_text_unavailable",
+                "__stage_status": "skipped",
+            }, "uncategorized"
         lowered = text.lower()
         best_label = "uncategorized"
         best_score = 0
@@ -166,12 +184,23 @@ class IngestionPipeline:
         return metadata, metadata
 
     def _stage_entities(self, text: str) -> tuple[dict[str, Any], list[str]]:
+        if not text.strip():
+            return {
+                "entity_count": 0,
+                "reason": "source_text_unavailable",
+                "__stage_status": "skipped",
+            }, []
         entities = sorted(set(_ENTITY_PATTERN.findall(text)))[:25]
         return {"entity_count": len(entities)}, entities
 
     def _stage_compliance(
-        self, record: DocumentRecord, label: str, metadata: dict[str, Any]
+        self, record: DocumentRecord, label: str, metadata: dict[str, Any], text: str
     ) -> tuple[dict[str, Any], dict[str, Any]]:
+        if not text.strip():
+            return {
+                "reason": "source_text_unavailable; compliance was not assessed",
+                "__stage_status": "skipped",
+            }, {"risk_score": None, "review": None}
         available_types = {label} if label != "uncategorized" else set()
         review_request = EnvironmentalReviewRequest(
             tenant_id=record.tenant_id,
@@ -193,24 +222,31 @@ class IngestionPipeline:
         review = compliance_engine.review(review_request, available_types, citations)
         return review.model_dump(mode="json"), {"risk_score": review.risk_score, "review": review}
 
-    def _stage_risk(self, compliance_output: dict[str, Any]) -> tuple[dict[str, Any], float]:
+    def _stage_risk(self, compliance_output: dict[str, Any]) -> tuple[dict[str, Any], float | None]:
+        if compliance_output.get("risk_score") is None:
+            return {
+                "reason": "compliance_analysis_unavailable",
+                "__stage_status": "skipped",
+            }, None
         risk_score = float(compliance_output["risk_score"])
         return {"risk_score": risk_score}, risk_score
 
     def _stage_vector_index(self, record: DocumentRecord, text: str) -> dict[str, Any]:
-        citation = EvidenceCitation(
-            document_id=record.id,
-            version=record.version,
-            chunk_id="0",
-            sha256=record.sha256,
-            excerpt=text[:600] if text else record.filename,
-        )
-        finding = rag_service.answer(question="__index__", citations=[citation])
-        return {"indexed": True, "grounded": finding.grounded}
+        # This codebase has metadata/full-text indexing, but no embedding model
+        # or vector-store write path. Never report a successful vector index
+        # until that capability is actually configured and verified.
+        del record, text
+        return {
+            "indexed": False,
+            "reason": "embedding_model_and_vector_store_not_configured",
+            "__stage_status": "skipped",
+        }
 
-    def _stage_workflow(self, record: DocumentRecord, risk_score: float) -> tuple[dict[str, Any], str]:
+    def _stage_workflow(self, record: DocumentRecord, risk_score: float | None) -> tuple[dict[str, Any], str]:
         workload = {"technical-review-pool": 4, "senior-review-pool": 1}
-        skill = "senior-review" if risk_score >= 70 else "technical-review"
+        # Missing evidence is routed to senior review, not assigned an invented
+        # numeric risk score or treated as low risk.
+        skill = "senior-review" if risk_score is None or risk_score >= 70 else "technical-review"
         assignment = assignment_engine.assign(record.case_id or record.id, skill, workload)
         return {
             "assignee": assignment.assignee,
@@ -252,7 +288,9 @@ class IngestionPipeline:
         start = time.perf_counter()
         output = fn(*args)
         duration_ms = (time.perf_counter() - start) * 1000
-        return StageResult(stage=stage, output=output if isinstance(output, dict) else {}, duration_ms=duration_ms)
+        stage_output = output if isinstance(output, dict) else {}
+        status = stage_output.pop("__stage_status", "completed")
+        return StageResult(stage=stage, status=status, output=stage_output, duration_ms=duration_ms)
 
     async def _timed_async(self, stage: PipelineStage, fn, *args) -> StageResult:
         start = time.perf_counter()
@@ -264,7 +302,8 @@ class IngestionPipeline:
         start = time.perf_counter()
         stage_output, value = fn(*args)
         duration_ms = (time.perf_counter() - start) * 1000
-        return StageResult(stage=stage, output=stage_output, duration_ms=duration_ms), value
+        status = stage_output.pop("__stage_status", "completed")
+        return StageResult(stage=stage, status=status, output=stage_output, duration_ms=duration_ms), value
 
 
 ingestion_pipeline = IngestionPipeline(ocr_engine=NullOcrEngine())
