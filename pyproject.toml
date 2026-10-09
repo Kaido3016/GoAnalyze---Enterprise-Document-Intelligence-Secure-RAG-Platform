@@ -32,6 +32,12 @@ dependencies = [
   "opentelemetry-instrumentation-sqlalchemy>=0.46b0",
   "opentelemetry-exporter-otlp-proto-grpc>=1.25.0",
   "pyjwt[crypto]>=2.13.0",
+  "pypdf>=5.9.0",
+  "pypdfium2>=4.30.0",
+  "pytesseract>=0.3.13",
+  "Pillow>=11.3.0",
+  "python-docx>=1.2.0",
+  "numpy>=2.2.0",
 ]
 
 [project.optional-dependencies]
