@@ -20,7 +20,6 @@ export default function DocumentDetailPage() {
   const { status, error, result, process } = useProcessDocument();
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setDoc(getCachedDocument(documentId));
   }, [documentId]);
 
