@@ -19,6 +19,7 @@ from .ingestion import ingestion_pipeline
 from .models import (
     AuditEvent,
     AuditEventListResponse,
+    ClassificationLevel,
     DocumentIngestRequest,
     DocumentProcessingResult,
     DocumentRecord,
@@ -350,7 +351,7 @@ async def submit_setup_configuration(payload: SetupConfiguration) -> SetupConfig
     if payload.email_notifications_enabled:
         if not (payload.email_smtp_host and payload.email_from_address):
             warnings.append("email_notification_settings_incomplete")
-    return SetupConfigurationResult(accepted=len(warnings) == 0, validated_components=validated, warnings=warnings)
+    return SetupConfigurationResult(accepted=True, validated_components=validated, warnings=warnings)
 
 
 @app.post("/v1/documents/{document_id}/process", response_model=DocumentProcessingResult)
@@ -585,7 +586,7 @@ async def list_documents(
     purpose = request.headers.get("x-purpose", "case-review")
     purpose_decision = evaluate_abac(
         context, "document:read", context.tenant_id, 
-        __import__("gov_platform.models", fromlist=["ClassificationLevel"]).ClassificationLevel.internal,
+        ClassificationLevel.internal,
         purpose,
     )
     if not purpose_decision.allowed:
