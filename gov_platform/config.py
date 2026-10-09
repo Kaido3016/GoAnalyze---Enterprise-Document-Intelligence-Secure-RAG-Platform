@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     minio_secret_key: str | None = None
     minio_bucket: str = "goanalyze-documents"
     minio_secure: bool = False
+    # Volatile storage is an explicit local-development/test opt-in only.
+    # Production must never acknowledge writes that disappear on process restart.
+    allow_in_memory_storage_fallback: bool = False
     kafka_bootstrap_servers: str = "kafka:9092"
     temporal_target_host: str = "temporal:7233"
 
