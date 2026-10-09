@@ -85,6 +85,7 @@ def upgrade() -> None:
         sa.Column("source_version", sa.String(255), nullable=True),
         sa.Column("status", sa.String(64), nullable=False),
         sa.Column("content_sha256", sa.String(64), nullable=True),
+        sa.Column("content_text", sa.String(), nullable=True),
         sa.Column("last_verified_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("reviewer", sa.String(255), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
@@ -93,8 +94,24 @@ def upgrade() -> None:
     )
     op.create_index("ix_regulatory_sources_jurisdiction_status", "regulatory_sources", ["jurisdiction", "status"])
 
+    op.create_table(
+        "regulatory_chunks",
+        sa.Column("id", sa.Uuid(), nullable=False),
+        sa.Column("source_id", sa.Uuid(), nullable=False),
+        sa.Column("chunk_index", sa.Integer(), nullable=False),
+        sa.Column("content", sa.String(), nullable=False),
+        sa.Column("embedding", sa.JSON(), nullable=False),
+        sa.Column("embedding_model", sa.String(255), nullable=False),
+        sa.Column("source_sha256", sa.String(64), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index("ix_regulatory_chunks_source", "regulatory_chunks", ["source_id"])
+
 
 def downgrade() -> None:
+    op.drop_index("ix_regulatory_chunks_source", table_name="regulatory_chunks")
+    op.drop_table("regulatory_chunks")
     op.drop_index("ix_regulatory_sources_jurisdiction_status", table_name="regulatory_sources")
     op.drop_table("regulatory_sources")
     op.drop_index("ix_processing_jobs_tenant_created", table_name="processing_jobs")
