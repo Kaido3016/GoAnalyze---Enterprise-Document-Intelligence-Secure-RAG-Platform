@@ -132,7 +132,7 @@ async def sync_sources() -> dict[str, int]:
                 source.content_text = text
                 source.content_sha256 = digest
                 version_match = re.search(
-                    r"(?:updated to|current to|à jour au)\\s+([^\\n.]{3,100})",
+                    r"(?:updated to|current to|à jour au)\s+([^\n.]{3,100})",
                     text[:20000],
                     re.IGNORECASE,
                 )
