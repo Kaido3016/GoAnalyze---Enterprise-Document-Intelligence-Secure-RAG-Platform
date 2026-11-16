@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Calculate workflow impact from paired, observed before/after task timings."""
 from __future__ import annotations
 
