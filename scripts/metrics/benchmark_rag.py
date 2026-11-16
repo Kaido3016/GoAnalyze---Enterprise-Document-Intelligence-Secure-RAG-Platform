@@ -49,7 +49,7 @@ def load_cases(path: Path) -> list[dict[str, Any]]:
 
 
 def request_answer(base_url: str, token: str, case: dict[str, Any], timeout: float) -> dict[str, Any]:
-    query = urllib.parse.urlencode({"question": case["question"]})
+    query = urllib.parse.urlencode({"question": case["question"], "include_retrieval_trace": "true"})
     url = f"{base_url.rstrip('/')}/v1/rag/answer?{query}"
     request = urllib.request.Request(
         url,
@@ -83,6 +83,16 @@ def evaluate(result: dict[str, Any]) -> dict[str, Any]:
     cited_docs = {str(c.get("document_id")) for c in citations if c.get("document_id")}
     expected_docs = {str(x) for x in case.get("expected_document_ids", [])}
     expected_terms = [str(x).casefold() for x in case.get("expected_answer_contains", [])]
+    retrieval_trace = body.get("retrieval_trace") or []
+    ranked_chunk_ids = [str(item.get("chunk_id")) for item in retrieval_trace if item.get("chunk_id")]
+    expected_chunks = {str(x) for x in case.get("expected_chunk_ids", [])}
+    relevant_ranks = [rank for rank, chunk_id in enumerate(ranked_chunk_ids, start=1) if chunk_id in expected_chunks]
+    retrieval_recall_at_k = len(set(ranked_chunk_ids) & expected_chunks) / len(expected_chunks) if expected_chunks else None
+    reciprocal_rank = 1 / relevant_ranks[0] if relevant_ranks else (0.0 if expected_chunks else None)
+    dcg = sum(1 / math.log2(rank + 1) for rank in relevant_ranks)
+    ideal_relevant = min(len(expected_chunks), len(ranked_chunk_ids))
+    idcg = sum(1 / math.log2(rank + 1) for rank in range(1, ideal_relevant + 1))
+    ndcg_at_k = dcg / idcg if expected_chunks and idcg else (0.0 if expected_chunks else None)
     missing_terms = [term for term in expected_terms if term not in answer_text]
     grounded_expected = case.get("expected_grounded")
     must_abstain = bool(case.get("must_abstain", False))
@@ -125,6 +135,12 @@ def evaluate(result: dict[str, Any]) -> dict[str, Any]:
         "retrieval_citation_recall": retrieval_recall,
         "retrieval_citation_precision": retrieval_precision,
         "retrieval_hit": retrieval_hit,
+        "retrieval_trace_available": bool(retrieval_trace),
+        "retrieved_chunk_ids": ranked_chunk_ids,
+        "expected_chunk_ids": sorted(expected_chunks),
+        "retrieval_recall_at_k": retrieval_recall_at_k,
+        "retrieval_mrr": reciprocal_rank,
+        "retrieval_ndcg_at_k": ndcg_at_k,
         "end_to_end_success": end_to_end,
         "answer_chars": len(statement),
         "response_chars": len(json.dumps(body, ensure_ascii=False)),
@@ -164,6 +180,9 @@ def main() -> int:
     retrieval_recalls = [r["retrieval_citation_recall"] for r in rows if r["retrieval_citation_recall"] is not None]
     retrieval_precisions = [r["retrieval_citation_precision"] for r in rows if r["retrieval_citation_precision"] is not None]
     e2e_values = [r["end_to_end_success"] for r in rows if r["end_to_end_success"] is not None]
+    recall_at_k_values = [r["retrieval_recall_at_k"] for r in rows if r["retrieval_recall_at_k"] is not None]
+    mrr_values = [r["retrieval_mrr"] for r in rows if r["retrieval_mrr"] is not None]
+    ndcg_values = [r["retrieval_ndcg_at_k"] for r in rows if r["retrieval_ndcg_at_k"] is not None]
 
     input_chars = sum(len(str(c["question"])) for c in cases)
     output_chars = sum(r["answer_chars"] for r in rows)
@@ -191,6 +210,10 @@ def main() -> int:
             "rag_citation_recall_pct": round(statistics.mean(retrieval_recalls) * 100, 2) if retrieval_recalls else None,
             "rag_citation_precision_pct": round(statistics.mean(retrieval_precisions) * 100, 2) if retrieval_precisions else None,
             "rag_retrieval_labeled_cases": len(retrieval_recalls),
+            "retriever_recall_at_k_pct": round(statistics.mean(recall_at_k_values) * 100, 2) if recall_at_k_values else None,
+            "retriever_mrr": round(statistics.mean(mrr_values), 4) if mrr_values else None,
+            "retriever_ndcg_at_k": round(statistics.mean(ndcg_values), 4) if ndcg_values else None,
+            "retriever_ranked_cases": len(recall_at_k_values),
             "end_to_end_task_success_pct": ratio(e2e_values),
             "end_to_end_labeled_cases": len(e2e_values),
             "latency_ms": {
@@ -210,7 +233,7 @@ def main() -> int:
             },
         },
         "limitations": [
-            "Citation metrics measure documents cited by the generated answer, not the hidden top-K retriever ranking.",
+            "Top-K retrieval metrics are computed only when the caller has platform-admin and the API returns its protected retrieval_trace; otherwise they are null.",
             "Answer-term checks are weak proxies; use reviewer-adjudicated semantic labels for publishable model-quality claims.",
             "Cost is unavailable unless provider pricing is supplied and token counts are estimated from characters; it is not provider billing data.",
             "Business impact must be measured from a real before/after workflow pilot, not inferred from API benchmarks.",
