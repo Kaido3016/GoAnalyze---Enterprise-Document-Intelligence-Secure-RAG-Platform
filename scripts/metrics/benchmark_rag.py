@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Black-box RAG evaluation for GoAnalyze.
 
 Uses only the Python standard library. Labels must come from a reviewed,
@@ -36,7 +35,7 @@ def load_cases(path: Path) -> list[dict[str, Any]]:
     seen: set[str] = set()
     for case in payload:
         if not isinstance(case, dict):
-            raise ValueError("each dataset entry must be an object")
+            raise TypeError("each dataset entry must be an object")
         case_id = str(case.get("id", "")).strip()
         question = str(case.get("question", "")).strip()
         if not case_id or not question:
