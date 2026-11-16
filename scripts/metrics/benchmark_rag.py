@@ -83,16 +83,17 @@ def evaluate(result: dict[str, Any]) -> dict[str, Any]:
     cited_docs = {str(c.get("document_id")) for c in citations if c.get("document_id")}
     expected_docs = {str(x) for x in case.get("expected_document_ids", [])}
     expected_terms = [str(x).casefold() for x in case.get("expected_answer_contains", [])]
+    trace_enabled = "retrieval_trace" in body
     retrieval_trace = body.get("retrieval_trace") or []
     ranked_chunk_ids = [str(item.get("chunk_id")) for item in retrieval_trace if item.get("chunk_id")]
     expected_chunks = {str(x) for x in case.get("expected_chunk_ids", [])}
     relevant_ranks = [rank for rank, chunk_id in enumerate(ranked_chunk_ids, start=1) if chunk_id in expected_chunks]
-    retrieval_recall_at_k = len(set(ranked_chunk_ids) & expected_chunks) / len(expected_chunks) if expected_chunks else None
-    reciprocal_rank = 1 / relevant_ranks[0] if relevant_ranks else (0.0 if expected_chunks else None)
+    retrieval_recall_at_k = (len(set(ranked_chunk_ids) & expected_chunks) / len(expected_chunks)) if trace_enabled and expected_chunks else None
+    reciprocal_rank = (1 / relevant_ranks[0] if relevant_ranks else 0.0) if trace_enabled and expected_chunks else None
     dcg = sum(1 / math.log2(rank + 1) for rank in relevant_ranks)
     ideal_relevant = min(len(expected_chunks), len(ranked_chunk_ids))
     idcg = sum(1 / math.log2(rank + 1) for rank in range(1, ideal_relevant + 1))
-    ndcg_at_k = dcg / idcg if expected_chunks and idcg else (0.0 if expected_chunks else None)
+    ndcg_at_k = (dcg / idcg if idcg else 0.0) if trace_enabled and expected_chunks else None
     missing_terms = [term for term in expected_terms if term not in answer_text]
     grounded_expected = case.get("expected_grounded")
     must_abstain = bool(case.get("must_abstain", False))
@@ -135,7 +136,7 @@ def evaluate(result: dict[str, Any]) -> dict[str, Any]:
         "retrieval_citation_recall": retrieval_recall,
         "retrieval_citation_precision": retrieval_precision,
         "retrieval_hit": retrieval_hit,
-        "retrieval_trace_available": bool(retrieval_trace),
+        "retrieval_trace_available": trace_enabled,
         "retrieved_chunk_ids": ranked_chunk_ids,
         "expected_chunk_ids": sorted(expected_chunks),
         "retrieval_recall_at_k": retrieval_recall_at_k,
