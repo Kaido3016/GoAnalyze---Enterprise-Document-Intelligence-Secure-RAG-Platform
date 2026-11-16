@@ -29,7 +29,7 @@ async def test_service_fails_closed_without_embedding_or_generation_provider(db_
 
 
 async def test_retrieval_trace_is_forbidden_to_non_admin(client, patched_auth, rsa_keys):
-    from tests.conftest import make_token
+    from conftest import make_token
 
     private_pem, _ = rsa_keys
     token = make_token(private_pem, tenant_id="ministry-a", roles=["case-reviewer"])
