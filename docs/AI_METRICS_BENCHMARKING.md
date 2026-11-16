@@ -14,6 +14,7 @@ Example case:
   "question": "What evidence does the approved policy require?",
   "expected_answer_contains": ["required phrase reviewed by the domain owner"],
   "expected_document_ids": ["UUID-OF-EXPECTED-DOCUMENT"],
+  "expected_chunk_ids": ["UUID-OF-EXPECTED-CHUNK"],
   "expected_grounded": true,
   "must_abstain": false
 }
@@ -23,7 +24,7 @@ Use actual UUID values and exact, reviewer-approved answer criteria. A substring
 
 ## 2. Run the RAG / model benchmark
 
-The API must be running with a configured embedding provider, generation provider, indexed test documents, and an authorized test identity.
+The API must be running with a configured embedding provider, generation provider, indexed test documents, and an authorized test identity. To collect actual top-K metrics, the benchmark identity must also have the `platform-admin` role; the optional ranked trace is rejected for ordinary users and contains only authorized chunk IDs, document IDs, type, and similarity score. Do not grant this role to normal users.
 
 PowerShell:
 
@@ -44,14 +45,14 @@ The script writes `metrics/reports/rag-benchmark.json` and reports:
 | Requested metric | Measurement |
 |---|---|
 | Model quality | Pass rate against reviewed expected answer terms / expected groundedness labels. This is a proxy until semantic human adjudication exists. |
-| RAG retrieval quality | Recall/precision of expected document IDs among documents cited in the answer. This is a citation-evidence proxy, **not hidden top-K retrieval Recall@K**. |
+| RAG retrieval quality | Citation evidence precision/recall plus retriever Recall@K, MRR and nDCG@K when reviewed expected chunk IDs and the protected ranked trace are available. |
 | End-to-end task success | Cases satisfying the configured answer, grounding, and expected-evidence checks. |
 | Latency | p50 / p95 / p99 and mean request latency. |
 | Cost efficiency | Approximate token-cost estimate only when pricing is supplied. Token counts are estimated from characters; this is not provider billing data. |
 | Reliability | HTTP success rate and request errors during the run. |
 | Scale / throughput | Requests per second at the configured concurrency. Use the dedicated load test for controlled concurrency sweeps. |
 
-The endpoint returns citations selected by the generated answer, not the full retriever candidate list. Do not relabel citation recall as retriever Recall@K. A future retrieval instrumentation change should expose ranked chunk IDs and scores to a protected benchmark-only trace or offline evaluator.
+The API exposes ranked chunk IDs and scores only when `include_retrieval_trace=true` is requested by a `platform-admin`. Supply `expected_chunk_ids` in each reviewed case to calculate Recall@K, MRR and nDCG@K. Without admin trace access or reviewed chunk labels, those metrics remain null.
 
 ## 3. Run a controlled load test
 
@@ -95,7 +96,7 @@ The report calculates average time saved per task, percentage time reduction, ex
 | Metric | Initial script evidence | Additional evidence needed for a strong claim |
 |---|---|---|
 | Model quality | reviewed term / grounding checks | blind semantic adjudication, multiple reviewers, inter-rater agreement |
-| Retrieval | cited-document precision/recall proxy | instrumented top-K chunk IDs, Recall@K, MRR/nDCG, authorization leakage tests |
+| Retrieval | cited-document precision/recall proxy | reviewed expected chunk IDs, protected top-K trace, Recall@K/MRR/nDCG and authorization leakage tests |
 | End-to-end | answer + grounding + citation acceptance | complete user workflow with success criteria and failure taxonomy |
 | Latency | observed API percentiles | repeated runs, production-like data and p95/p99 SLOs |
 | Cost | optional rough estimate | provider-reported token usage and invoice reconciliation |
