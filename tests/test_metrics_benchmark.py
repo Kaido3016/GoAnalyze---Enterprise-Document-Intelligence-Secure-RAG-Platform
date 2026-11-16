@@ -36,7 +36,7 @@ def test_retrieval_metrics_are_unavailable_without_trace():
         "latency_ms": 1.0,
         "error": None,
     })
-    assert result["retrieval_recall_at_k"] == 0.0
-    assert result["retrieval_mrr"] == 0.0
-    assert result["retrieval_ndcg_at_k"] == 0.0
+    assert result["retrieval_recall_at_k"] is None
+    assert result["retrieval_mrr"] is None
+    assert result["retrieval_ndcg_at_k"] is None
     assert result["retrieval_trace_available"] is False
