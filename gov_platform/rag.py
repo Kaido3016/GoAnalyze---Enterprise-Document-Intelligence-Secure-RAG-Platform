@@ -160,6 +160,7 @@ class GroundedRagService:
         session: AsyncSession,
         jurisdiction: str | None = None,
         document_ids: set[Any] | None = None,
+        retrieval_trace: list[dict[str, Any]] | None = None,
     ) -> AIFinding:
         settings = get_settings()
         if not settings.embedding_base_url or not settings.embedding_api_key:
@@ -219,6 +220,16 @@ class GroundedRagService:
             for score, kind, row, source in ranked[: max(1, min(settings.rag_top_k, 12))]
             if score >= settings.rag_min_similarity
         ]
+        if retrieval_trace is not None:
+            retrieval_trace.extend(
+                {
+                    "chunk_id": str(row.id),
+                    "document_id": str(row.document_id) if kind == "document" else None,
+                    "kind": kind,
+                    "score": round(float(score), 8),
+                }
+                for score, kind, row, _source in retrieved
+            )
         if not retrieved:
             return self._unavailable("no_authorized_relevant_chunks_found")
         evidence_parts = []

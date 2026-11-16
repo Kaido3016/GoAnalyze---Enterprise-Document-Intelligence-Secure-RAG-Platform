@@ -423,8 +423,14 @@ async def rag_answer(
     retrieval service resolves chunks from durable storage and validates the
     document version and digest before any content reaches the model.
     """
+    include_retrieval_trace = request.query_params.get("include_retrieval_trace", "false").lower() == "true"
+    if include_retrieval_trace and "platform-admin" not in context.roles:
+        raise HTTPException(status_code=403, detail="retrieval_trace_requires_platform_admin")
+    retrieval_trace: list[dict] | None = [] if include_retrieval_trace else None
     try:
-        finding = await rag_service.answer(question, context.tenant_id, context.roles, session)
+        finding = await rag_service.answer(
+            question, context.tenant_id, context.roles, session, retrieval_trace=retrieval_trace
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -442,7 +448,10 @@ async def rag_answer(
         ),
     )
 
-    return finding.model_dump(mode="json")
+    response = finding.model_dump(mode="json")
+    if retrieval_trace is not None:
+        response["retrieval_trace"] = retrieval_trace
+    return response
 
 
 @app.post("/v1/environmental-reviews")

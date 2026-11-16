@@ -26,3 +26,16 @@ async def test_service_fails_closed_without_embedding_or_generation_provider(db_
     assert finding.confidence == 0.0
     assert finding.citations == []
     assert "embedding_provider_not_configured" in finding.explanation
+
+
+async def test_retrieval_trace_is_forbidden_to_non_admin(client, patched_auth, rsa_keys):
+    from conftest import make_token
+
+    private_pem, _ = rsa_keys
+    token = make_token(private_pem, tenant_id="ministry-a", roles=["case-reviewer"])
+    response = await client.post(
+        "/v1/rag/answer?question=What%20is%20the%20policy%3F&include_retrieval_trace=true",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "retrieval_trace_requires_platform_admin"
