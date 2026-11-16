@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Concurrent RAG API load test. Run only against an environment you own."""
 from __future__ import annotations
 
@@ -39,7 +38,7 @@ def send(base_url: str, token: str, question: str, timeout: float) -> dict:
     except urllib.error.HTTPError as exc:
         return {"ok": False, "status": exc.code, "latency_ms": (time.perf_counter() - start) * 1000,
                 "grounded": False, "error": f"HTTP {exc.code}"}
-    except Exception as exc:  # report transport/timeout failures as failed samples
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError, TypeError, AttributeError) as exc:  # report request failures
         return {"ok": False, "status": None, "latency_ms": (time.perf_counter() - start) * 1000,
                 "grounded": False, "error": type(exc).__name__}
 
