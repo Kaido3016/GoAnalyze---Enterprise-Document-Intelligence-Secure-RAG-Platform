@@ -101,8 +101,9 @@ def evaluate(result: dict[str, Any]) -> dict[str, Any]:
         len(expected_docs & cited_docs) / len(expected_docs) if expected_docs else None
     )
     retrieval_precision = (
-        len(expected_docs & cited_docs) / len(cited_docs) if expected_docs and cited_docs else
-        (1.0 if expected_docs and not cited_docs and not expected_docs else None)
+        len(expected_docs & cited_docs) / len(cited_docs)
+        if expected_docs and cited_docs
+        else (0.0 if expected_docs else None)
     )
     retrieval_hit = bool(expected_docs & cited_docs) if expected_docs else None
     end_to_end = None
